@@ -1,0 +1,270 @@
+-- dpkg-query.lua
+-- apt-lua
+--
+-- This file provides functions to access the package database.
+-- This file can be run from the shell.
+--
+-- Copyright (c) 2019 JackMacWindows.
+
+os.loadAPI("apt-lua/dpkg-control.lua")
+
+local function trim(s) return string.match(s, '^()[%s%\0]*$') and '' or string.match(s, '^[%s%\0]*(.*[^%s%\0])') end
+local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or string.sub(str, 1, len) end
+local dpkg_control = _G["dpkg-control"]
+local dpkg_cache_dir = "apt-lua/cache" --"/var/lib/dpkg"
+fs.makeDir(dpkg_cache_dir)
+
+function readDatabase()
+    local file = io.open(fs.combine(dpkg_cache_dir, "status"), "r")
+    local retval = {{}}
+    local last_key = nil
+    local s = 1
+    for line in file:lines() do
+        if line == "" then 
+            s=s+1
+            retval[s] = {}
+            last_key = nil
+        else
+            if string.sub(line, 1, 1) == " " and last_key ~= nil then
+                if last_key == "Description" then
+                    if type(retval[s][last_key]) == "string" then retval[s][last_key] = {Short = retval[s][last_key], Long = ""} end
+                    retval[s][last_key].Long = retval[s][last_key].Long .. (string.sub(line, 2) == "." and "\n\n" or string.sub(line, 2))
+                else retval[s][last_key] = retval[s][last_key] .. (string.sub(line, 2) == "." and "\n\n" or string.sub(line, 2)) end
+            else
+                last_key = string.sub(line, 1, (string.find(line, ":") or 0) - 1)
+                retval[s][last_key] = trim(string.sub(line, (string.find(line, ":") or -1) + 1))
+            end
+        end
+    end
+    file:close()
+    local realretval = {}
+    for k,v in pairs(retval) do if v.Package then realretval[v.Package] = v end end
+    return realretval
+end
+
+local function readDAvailable()
+    local file = io.open(fs.combine(dpkg_cache_dir, "available"), "r")
+    local retval = {{}}
+    local last_key = nil
+    local s = 1
+    for line in file:lines() do
+        if line == "" then 
+            s=s+1
+            retval[s] = {}
+            last_key = nil
+        else
+            if string.sub(line, 1, 1) == " " and last_key ~= nil then
+                if last_key == "Description" then
+                    if type(retval[s][last_key]) == "string" then retval[s][last_key] = {Short = retval[s][last_key], Long = ""} end
+                    retval[s][last_key].Long = retval[s][last_key].Long .. (string.sub(line, 2) == "." and "\n\n" or string.sub(line, 2))
+                else retval[s][last_key] = retval[s][last_key] .. (string.sub(line, 2) == "." and "\n\n" or string.sub(line, 2)) end
+            else
+                last_key = string.sub(line, 1, (string.find(line, ":") or 0) - 1)
+                retval[s][last_key] = trim(string.sub(line, (string.find(line, ":") or -1) + 1))
+            end
+        end
+    end
+    file:close()
+    local realretval = {}
+    for k,v in pairs(retval) do if v.Package then realretval[v.Package] = v end end
+    return realretval
+end
+
+function writeDatabase(data)
+    local file = fs.open(fs.combine(dpkg_cache_dir, "status"), "w")
+    local function check(v) if type(v) == "table" then return v.Short .. "\n " .. string.gsub(v.Long, "\n\n", "\n .\n") else return v end end
+    for k,v in pairs(data) do
+        for l,w in pairs(v) do file.writeLine(k .. ": " .. check(v)) end
+        file.writeLine("")
+    end
+    file.close()
+end
+
+function findPackage(name)
+    local db = readDatabase()
+    for k,v in pairs(db) do if string.match(k, name) then return v end end
+    return nil
+end
+
+if shell then
+    local args = {}
+    local mode = nil
+    local showformat = "${Package}\t${Version}\n"
+    local load_avail = false
+    local nextarg = false
+    for k,v in pairs({...}) do
+        if nextarg then showformat = v; nextarg = false
+        elseif v == "-l" or v == "--list" then mode = 0
+        elseif v == "-W" or v == "--show" then mode = 1
+        elseif v == "-s" or v == "--status" then mode = 2
+        elseif v == "-L" or v == "--listfiles" then mode = 3
+        elseif v == "--control-list" then mode = 4
+        elseif v == "--control-show" then mode = 5
+        elseif v == "-c" or v == "--control-path" then mode = 6
+        elseif v == "-S" or v == "--search" then mode = 7
+        elseif v == "-p" or v == "--print-avail" then mode = 8
+        elseif v == "-?" or v == "--help" then print("Usage: dpkg-query [options...] <command>"); error("", -1)
+        elseif v == "--version" then print("dpkg-query v1.0\nPart of apt-lua for CraftOS\nCopyright (c) 2019 JackMacWindows."); error("", -1)
+        elseif string.find(v, "--admindir=") == 1 then dpkg_cache_dir = string.sub(v, 12)
+        elseif v == "--load-avail" then load_avail = true
+        elseif string.find(v, "--showformat=") == 1 then showformat = string.sub(v, 14)
+        elseif v == "-f" then nextarg = true
+        else table.insert(args, v) end
+    end
+    showformat = string.gsub(string.gsub(showformat, "\\n", "\n"), "\\t", "\t")
+    if mode == 0 then
+        local pattern = nil
+        if args[1] ~= nil then pattern = string.gsub(args[1], "%*", ".+") end
+        local db = readDatabase()
+        local function printPackage(v)
+            local state = ""
+            if string.find(v.Status, "^install ") then state = "i"
+            elseif string.find(v.Status, " hold") then state = "h"
+            elseif string.find(v.Status, " deinstall") then state = "r"
+            elseif string.find(v.Status, " purge") then state = "p"
+            else state = "u" end
+            if string.find(v.Status, " not-installed") then state = state .. "n"
+            elseif string.find(v.Status, " config-files") then state = state .. "c"
+            elseif string.find(v.Status, " half-installed") then state = state .. "H"
+            elseif string.find(v.Status, " unpacked") then state = state .. "U"
+            elseif string.find(v.Status, " half-configured") then state = state .. "F"
+            elseif string.find(v.Status, " triggers-awaited") then state = state .. "W"
+            elseif string.find(v.Status, " triggers-pending") then state = state .. "t"
+            elseif string.find(v.Status, " installed") then state = state .. "i"
+            else state = state .. "u" end
+            if string.find(v.Status, " reinst-required") then state = state .. "R" else state = state .. " " end -- i hope nobody ever sees the R ever at any point in time :(((((
+            local w = term.getSize() - 4
+            print(string.format("%3s %s %s %s", state, pad(v.Package, w / 4), pad(v.Version, w / 4), pad(v.Description.Short, w / 2)))
+        end
+        if pattern then for k,v in pairs(db) do if string.match(v.Package, pattern) then printPackage(v) end end 
+        else for k,v in pairs(db) do if string.find(v.Status, " config-files") == nil and string.find(v.Status, " not-installed") == nil then printPackage(v) end end end
+    elseif mode == 1 then
+        local pattern = nil
+        if args[1] ~= nil then pattern = string.gsub(args[1], "%*", ".+") end
+        local db = readDatabase()
+        local function printPackage(v)
+            local state = ""
+            if string.find(v.Status, "^install ") then state = "i"
+            elseif string.find(v.Status, "hold") then state = "h"
+            elseif string.find(v.Status, "deinstall") then state = "r"
+            elseif string.find(v.Status, "purge") then state = "p"
+            else state = "u" end
+            if string.find(v.Status, "not-installed") then state = state .. "n"
+            elseif string.find(v.Status, "config-files") then state = state .. "c"
+            elseif string.find(v.Status, "half-installed") then state = state .. "H"
+            elseif string.find(v.Status, "unpacked") then state = state .. "U"
+            elseif string.find(v.Status, "half-configured") then state = state .. "F"
+            elseif string.find(v.Status, "triggers-awaited") then state = state .. "W"
+            elseif string.find(v.Status, "triggers-pending") then state = state .. "t"
+            elseif string.find(v.Status, " installed") then state = state .. "i"
+            else state = state .. "u" end
+            if string.find(v.Status, " reinst-required") then state = state .. "R" else state = state .. " " end
+            local function getsub(field, width) return width ~= "" and pad(v[field], tonumber(string.sub(width, 2))) or v[field] end
+            write(string.gsub(showformat, "%${(.-)(;?%d*)}", getsub))
+        end
+        if pattern then for k,v in pairs(db) do if string.match(v.Package, pattern) then printPackage(v) end end 
+        else for k,v in pairs(db) do if string.find(v.Status, " config-files") == nil and string.find(v.Status, " not-installed") == nil then printPackage(v) end end end
+    elseif mode == 2 then
+        if #args < 1 then error("Usage: dpkg-query [options...] --status <package-name...>") end
+        local db = readDatabase()
+        local function check(v) if type(v) == "table" then return v.Short .. "\n" .. string.gsub(v.Long, "\n\n", "\n .\n") else return v end end
+        for _,a in pairs(args) do
+            for k,v in pairs(db) do if k == a then
+                for l,w in pairs(v) do print(l .. ": " .. check(w)) end
+                break
+            end end
+            print("")
+        end
+    elseif mode == 3 then
+        if #args < 1 then error("Usage: dpkg-query [options...] --listfiles <package-name...>") end
+        local db = readDatabase()
+        for _,a in pairs(args) do
+            local path
+            if fs.exists(fs.combine(dpkg_cache_dir, "info/" .. a .. ".list")) then path = fs.combine(dpkg_cache_dir, "info/" .. a .. ".list")
+            else for k,v in pairs(db) do if k == a then
+                if not fs.exists(fs.combine(dpkg_cache_dir, "info/" .. a .. "!" .. v.Architecture .. ".list")) then error("Could not find list of files for " .. a) end
+                path = fs.combine(dpkg_cache_dir, "info/" .. a .. "!" .. v.Architecture .. ".list")
+                break
+            end end end
+            local file = fs.open(path, "r")
+            print(file.readAll())
+            file.close()
+        end
+    elseif mode == 4 then
+        if #args < 1 then error("Usage: dpkg-query [options...] --control-list <package-name>") end
+        local files = {}
+        for k,v in pairs(fs.list(fs.combine(dpkg_cache_dir, "info"))) do 
+            if string.match(v, "^" .. string.gsub(args[1], "%-", "%%-") .. "%..+") then table.insert(files, fs.combine(dpkg_cache_dir, "info/" .. v)) end
+            if k % 1000 == 0 then
+                os.queueEvent("nosleep")
+                os.pullEvent()
+            end
+        end
+        if #files == 0 then
+            local db = readDatabase()
+            for k,v in pairs(db) do if k == args[1] then 
+                local mstr = "^" .. string.gsub(args[1], "%-", "%%-") .. "!" .. v.Architecture .. "%.(.+)"
+                for l,w in pairs(fs.list(fs.combine(dpkg_cache_dir, "info"))) do 
+                    if string.match(w, mstr) then table.insert(files, string.match(w, mstr)) end
+                    if l % 1000 == 0 then
+                        os.queueEvent("nosleep")
+                        os.pullEvent()
+                    end
+                end
+                break
+            end end
+        end
+        for k,v in pairs(files) do if v ~= "list" then print(v) end end
+    elseif mode == 5 then
+        if #args < 2 then error("Usage: dpkg-query [options...] --control-show <package-name> <control-file>") end
+        if fs.exists(fs.combine(dpkg_cache_dir, "info/" .. args[1] .. "." .. args[2])) then
+            local file = fs.open(fs.combine(dpkg_cache_dir, "info/" .. args[1] .. "." .. args[2]), "r")
+            print(file.readAll())
+            file.close()
+        else
+            local db = readDatabase()
+            for k,v in pairs(db) do if k == args[1] then 
+                if fs.exists(fs.combine(dpkg_cache_dir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2])) then
+                    local file = fs.open(fs.combine(dpkg_cache_dir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2]), "r")
+                    print(file.readAll())
+                    file.close()
+                end
+                break
+            end end
+        end
+    elseif mode == 6 then
+        error("This command is deprecated upstream, therefore it will remain unimplemented here.")
+    elseif mode == 7 then
+        if #args < 1 then error("Usage: dpkg-query [options...] --search <pattern>") end
+        local plain = false
+        local found = false
+        local pattern = string.gsub(string.gsub(args[1], "([^\\])%*", "%1%.%*"), "([^\\])%?", "%1%.%-")
+        if string.find(args[1], "[%*%[%?/]") ~= 1 then pattern = ".*" .. pattern .. ".*"
+        elseif string.find(args[1], "[%*%[%?/]") == nil then plain = true 
+        else pattern = "^" .. pattern .. "$" end
+        local files = fs.find(fs.combine(dpkg_cache_dir, "info/*.list"))
+        print("Searching...")
+        for k,v in pairs(files) do
+            local file = io.open(v, "r")
+            for line in file:lines() do if string.find(line, pattern, 1, plain) then 
+                print(string.sub(fs.getName(v), 1, string.find(fs.getName(v), "[!.]") - 1) .. ": " .. line)
+                found = true
+            end end
+            file:close()
+            os.queueEvent("nosleep")
+            os.pullEvent()
+        end
+        if not found then error("no pattern matching " .. args[1]) end
+    elseif mode == 8 then
+        if #args < 1 then error("Usage: dpkg-query [options...] --print-avail <package-name...>") end
+        local db = readAvailable()
+        local function check(v) if type(v) == "table" then return v.Short .. "\n" .. string.gsub(v.Long, "\n\n", "\n .\n") else return v end end
+        for _,a in pairs(args) do
+            for k,v in pairs(db) do if k == a then
+                for l,w in pairs(v) do print(l .. ": " .. check(w)) end
+                break
+            end end
+            print("")
+        end
+    else error("Usage: dpkg-query [options...] <command>") end
+end
