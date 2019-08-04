@@ -179,8 +179,8 @@ Commands:
     --ctrl-tarfile <deb>               Output control tarfile.
     --fsys-tarfile <deb>               Output filesystem tarfile.
     -?, --help                         Show this help message.
-        --version                      Show the version.]]); error("", -1)
-        elseif v == "--version" then print("dpkg-deb v1.0\nPart of apt-lua for CraftOS\nCopyright (c) 2019 JackMacWindows."); error("", -1)
+        --version                      Show the version.]]); return 2
+        elseif v == "--version" then print("dpkg-deb v1.0\nPart of apt-lua for CraftOS\nCopyright (c) 2019 JackMacWindows."); return 2
         elseif string.find(v, "--showformat=") == 1 then showformat = string.sub(v, 14)
         elseif string.sub(v, 1, 2) == "-z" then compress_level = tonumber(string.sub(v, 3))
         elseif v == "--no-uniform-compression" then uniform_compression = false

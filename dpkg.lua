@@ -1,0 +1,9 @@
+-- dpkg.lua
+-- apt-lua
+--
+-- This file is the actual dpkg script. It manages installation, removal,
+-- configuration, and other functions. Frontends can import this script to
+-- automate installation.
+-- This file can be run from the shell.
+--
+-- Copyright (c) 2019 JackMacWindows.

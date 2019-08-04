@@ -192,7 +192,7 @@ if shell then
     if #args < 2 then error("Usage: ar <dpqrtx[cfTuv]> <archive.a> [path] [files...]") end
     if args[1] == "--version" then
         print("CraftOS ar (CCKernel2 binutils) 1.0 (compatible with GNU/BSD ar)\nCopyright (c) 2019 JackMacWindows.")
-        error("", -1)
+        return 2
     end
     local mode = nil
     local update = false

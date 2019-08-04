@@ -11,11 +11,11 @@ os.loadAPI("apt-lua/dpkg-control.lua")
 local function trim(s) return string.match(s, '^()[%s%\0]*$') and '' or string.match(s, '^[%s%\0]*(.*[^%s%\0])') end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or string.sub(str, 1, len) end
 local dpkg_control = _G["dpkg-control"]
-local dpkg_cache_dir = "apt-lua/cache" --"/var/lib/dpkg"
-fs.makeDir(dpkg_cache_dir)
+admindir = "/var/lib/dpkg"
+fs.makeDir(admindir)
 
 function readDatabase()
-    local file = io.open(fs.combine(dpkg_cache_dir, "status"), "r")
+    local file = io.open(fs.combine(admindir, "status"), "r")
     local retval = {{}}
     local last_key = nil
     local s = 1
@@ -42,8 +42,8 @@ function readDatabase()
     return realretval
 end
 
-local function readDAvailable()
-    local file = io.open(fs.combine(dpkg_cache_dir, "available"), "r")
+local function readAvailable()
+    local file = io.open(fs.combine(admindir, "available"), "r")
     local retval = {{}}
     local last_key = nil
     local s = 1
@@ -71,7 +71,8 @@ local function readDAvailable()
 end
 
 function writeDatabase(data)
-    local file = fs.open(fs.combine(dpkg_cache_dir, "status"), "w")
+    fs.copy(fs.combine(admindir, "status"), fs.combine(admindir, "status-old"))
+    local file = fs.open(fs.combine(admindir, "status"), "w")
     local function check(v) if type(v) == "table" then return v.Short .. "\n " .. string.gsub(v.Long, "\n\n", "\n .\n") else return v end end
     for k,v in pairs(data) do
         for l,w in pairs(v) do file.writeLine(k .. ": " .. check(v)) end
@@ -103,9 +104,23 @@ if shell then
         elseif v == "-c" or v == "--control-path" then mode = 6
         elseif v == "-S" or v == "--search" then mode = 7
         elseif v == "-p" or v == "--print-avail" then mode = 8
-        elseif v == "-?" or v == "--help" then print("Usage: dpkg-query [options...] <command>"); error("", -1)
-        elseif v == "--version" then print("dpkg-query v1.0\nPart of apt-lua for CraftOS\nCopyright (c) 2019 JackMacWindows."); error("", -1)
-        elseif string.find(v, "--admindir=") == 1 then dpkg_cache_dir = string.sub(v, 12)
+        elseif v == "-?" or v == "--help" then print([[Usage: dpkg-query [<option> ...] <command>
+Commands:
+    -s|--status <package> ...        Display package status details.
+    -p|--print-avail <package> ...   Display available version details.
+    -L|--listfiles <package> ...     List files 'owned' by package(s).
+    -l|--list [<pattern> ...]        List packages concisely.
+    -W|--show [<pattern> ...]        Show information on package(s).
+    -S|--search <pattern> ...        Find package(s) owning file(s).
+        --control-list <package>     Print the package control file list.
+        --control-show <package> <file>
+                                     Show the package control file.
+    -c|--control-path <package> [<file>]
+                                     Print path for package control file.
+    -?, --help                       Show this help message.
+        --version                    Show the version.]]); return 2
+        elseif v == "--version" then print("dpkg-query v1.0\nPart of apt-lua for CraftOS\nCopyright (c) 2019 JackMacWindows."); return 2
+        elseif string.find(v, "--admindir=") == 1 then admindir = string.sub(v, 12)
         elseif v == "--load-avail" then load_avail = true
         elseif string.find(v, "--showformat=") == 1 then showformat = string.sub(v, 14)
         elseif v == "-f" then nextarg = true
@@ -180,10 +195,10 @@ if shell then
         local db = readDatabase()
         for _,a in pairs(args) do
             local path
-            if fs.exists(fs.combine(dpkg_cache_dir, "info/" .. a .. ".list")) then path = fs.combine(dpkg_cache_dir, "info/" .. a .. ".list")
+            if fs.exists(fs.combine(admindir, "info/" .. a .. ".list")) then path = fs.combine(admindir, "info/" .. a .. ".list")
             else for k,v in pairs(db) do if k == a then
-                if not fs.exists(fs.combine(dpkg_cache_dir, "info/" .. a .. "!" .. v.Architecture .. ".list")) then error("Could not find list of files for " .. a) end
-                path = fs.combine(dpkg_cache_dir, "info/" .. a .. "!" .. v.Architecture .. ".list")
+                if not fs.exists(fs.combine(admindir, "info/" .. a .. "!" .. v.Architecture .. ".list")) then error("Could not find list of files for " .. a) end
+                path = fs.combine(admindir, "info/" .. a .. "!" .. v.Architecture .. ".list")
                 break
             end end end
             local file = fs.open(path, "r")
@@ -193,8 +208,8 @@ if shell then
     elseif mode == 4 then
         if #args < 1 then error("Usage: dpkg-query [options...] --control-list <package-name>") end
         local files = {}
-        for k,v in pairs(fs.list(fs.combine(dpkg_cache_dir, "info"))) do 
-            if string.match(v, "^" .. string.gsub(args[1], "%-", "%%-") .. "%..+") then table.insert(files, fs.combine(dpkg_cache_dir, "info/" .. v)) end
+        for k,v in pairs(fs.list(fs.combine(admindir, "info"))) do 
+            if string.match(v, "^" .. string.gsub(args[1], "%-", "%%-") .. "%..+") then table.insert(files, fs.combine(admindir, "info/" .. v)) end
             if k % 1000 == 0 then
                 os.queueEvent("nosleep")
                 os.pullEvent()
@@ -204,7 +219,7 @@ if shell then
             local db = readDatabase()
             for k,v in pairs(db) do if k == args[1] then 
                 local mstr = "^" .. string.gsub(args[1], "%-", "%%-") .. "!" .. v.Architecture .. "%.(.+)"
-                for l,w in pairs(fs.list(fs.combine(dpkg_cache_dir, "info"))) do 
+                for l,w in pairs(fs.list(fs.combine(admindir, "info"))) do 
                     if string.match(w, mstr) then table.insert(files, string.match(w, mstr)) end
                     if l % 1000 == 0 then
                         os.queueEvent("nosleep")
@@ -217,15 +232,15 @@ if shell then
         for k,v in pairs(files) do if v ~= "list" then print(v) end end
     elseif mode == 5 then
         if #args < 2 then error("Usage: dpkg-query [options...] --control-show <package-name> <control-file>") end
-        if fs.exists(fs.combine(dpkg_cache_dir, "info/" .. args[1] .. "." .. args[2])) then
-            local file = fs.open(fs.combine(dpkg_cache_dir, "info/" .. args[1] .. "." .. args[2]), "r")
+        if fs.exists(fs.combine(admindir, "info/" .. args[1] .. "." .. args[2])) then
+            local file = fs.open(fs.combine(admindir, "info/" .. args[1] .. "." .. args[2]), "r")
             print(file.readAll())
             file.close()
         else
             local db = readDatabase()
             for k,v in pairs(db) do if k == args[1] then 
-                if fs.exists(fs.combine(dpkg_cache_dir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2])) then
-                    local file = fs.open(fs.combine(dpkg_cache_dir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2]), "r")
+                if fs.exists(fs.combine(admindir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2])) then
+                    local file = fs.open(fs.combine(admindir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2]), "r")
                     print(file.readAll())
                     file.close()
                 end
@@ -242,7 +257,7 @@ if shell then
         if string.find(args[1], "[%*%[%?/]") ~= 1 then pattern = ".*" .. pattern .. ".*"
         elseif string.find(args[1], "[%*%[%?/]") == nil then plain = true 
         else pattern = "^" .. pattern .. "$" end
-        local files = fs.find(fs.combine(dpkg_cache_dir, "info/*.list"))
+        local files = fs.find(fs.combine(admindir, "info/*.list"))
         print("Searching...")
         for k,v in pairs(files) do
             local file = io.open(v, "r")

@@ -359,7 +359,7 @@ if shell then
             if string.find(v, "v") then verbosity = 1  end
             if string.find(v, "?") then
                 print("Usage: ")
-                error("", -1)
+                return 2
             end
         elseif string.sub(v, 1, 2) == "--" then
             if v == "--catenate" then mode = 0
@@ -375,10 +375,10 @@ if shell then
             elseif v == "--get" then mode = 6
             elseif v == "--help" or v == "--usage" then 
                 print("Usage: ")
-                error("", -1)
+                return 2
             elseif v == "--version" then
                 print("CraftOS tar v0.9")
-                error("", -1)
+                return 2
             elseif v == "--keep-old-files" then replace = false
             elseif v == "--overwrite" then replace = true
             elseif v == "--remove-files" then delete = true
@@ -410,8 +410,8 @@ if shell then
             elseif v == "--no-recursion" then norecurse = true end
         else table.insert(files, v) end
     end
-    if compress then 
-        if kernel then os.loadAPI("LibDeflate") else _G.LibDeflate = dofile(shell.resolveProgram("LibDeflate.lua")) end
+    if compress and LibDeflate == nil then 
+        if kernel then os.loadAPI("LibDeflate") elseif shell.resolveProgram("LibDeflate.lua") ~= nil then _G.LibDeflate = dofile(shell.resolveProgram("LibDeflate.lua")) end
         if LibDeflate == nil then error("Compression is only supported when LibDeflate.lua is available in the PATH.") end
     end
     local olddir = shell.dir()
