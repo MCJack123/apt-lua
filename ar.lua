@@ -7,8 +7,10 @@ local function cc2u(p) return bit.band(p, 0x8) / 8 + bit.band(p, 0x2) + bit.band
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or str end
 local verbosity = 0
 
+local ar = {}
+
 -- Loads an archive into a table
-function load(path)
+function ar.load(path)
     if not fs.exists(path) then return nil end
     local file = fs.open(path, "rb")
     local oldread = file.read
@@ -68,7 +70,7 @@ function load(path)
 end
 
 -- Writes a table entry to a file
-function write(v, p)
+function ar.write(v, p)
     local file = fs.open(p, "wb")
     for s in string.gmatch(v.data, ".") do file.write(string.byte(s)) end
     file.close()
@@ -81,7 +83,7 @@ function write(v, p)
 end
 
 -- Extracts files from a table or file to a directory
-function extract(data, path)
+function ar.extract(data, path)
     if type(data) == "string" then data = load(data) end
     if not fs.exists(path) then fs.makeDir(path) end
     for k,v in pairs(data) do
@@ -91,7 +93,7 @@ function extract(data, path)
 end
 
 -- Reads a file into a table entry
-function read(p)
+function ar.read(p)
     local file = fs.open(p, "rb")
     local retval = {
         name = fs.getName(p),
@@ -111,7 +113,7 @@ function read(p)
 end
 
 -- Packs files in a directory into a table (skips subdirectories)
-function pack(path)
+function ar.pack(path)
     local retval = {}
     for k,v in pairs(fs.list(path)) do
         local p = fs.combine(path, v)
@@ -121,7 +123,7 @@ function pack(path)
 end
 
 -- Saves a table to an archive file
-function save(data, path)
+function ar.save(data, path)
     local file = fs.open(path, "wb")
     local oldwrite = file.write
     local seek = 0
@@ -187,7 +189,7 @@ end
 
 local months = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 
-if shell then
+if pcall(require, "ar") then
     local args = {...}
     if #args < 2 then error("Usage: ar <dpqrtx[cfTuv]> <archive.a> [path] [files...]") end
     if args[1] == "--version" then
@@ -208,7 +210,7 @@ if shell then
     if string.find(args[1], "u") then update = true end
     if string.find(args[1], "T") then truncate = true end
     if string.find(args[1], "f") then truncate = true end
-    local data = load(shell.resolve(args[2]))
+    local data = ar.load(shell.resolve(args[2]))
     local files = {...}
     table.remove(files, 1)
     table.remove(files, 1)
@@ -218,20 +220,20 @@ if shell then
     end
     if mode == 0 then
         for k,v in pairs(data) do for l,w in pairs(files) do if v.name == w then data[k] = nil; break end end end
-        save(data, shell.resolve(args[2]))
+        ar.save(data, shell.resolve(args[2]))
     elseif mode == 1 then
         if #args > 2 then for k,v in pairs(data) do for l,w in pairs(files) do if v.name == w then print(v.data); break end end end
         else for k,v in pairs(data) do print(v.data) end end
     elseif mode == 2 then
         for k,v in pairs(files) do 
-            local f = read(shell.resolve(v))
+            local f = ar.read(shell.resolve(v))
             f.name = string.sub(f.name, 1, truncate and 15 or nil)
             table.insert(data, f) 
         end
-        save(data, shell.resolve(args[2]))
+        ar.save(data, shell.resolve(args[2]))
     elseif mode == 3 then
         for k,v in pairs(files) do
-            local f = read(shell.resolve(v))
+            local f = ar.read(shell.resolve(v))
             f.name = string.sub(f.name, 1, truncate and 15 or nil)
             local found = false
             for l,w in pairs(data) do if w.name == f.name then
@@ -241,7 +243,7 @@ if shell then
             end end
             if not found then table.insert(data, f) end
         end
-        save(data, shell.resolve(args[2]))
+        ar.save(data, shell.resolve(args[2]))
     elseif mode == 4 then
         if verbosity > 0 then
             local tmp = {}
@@ -265,6 +267,8 @@ if shell then
             f = {}
             for k,v in pairs(data) do for l,w in pairs(files) do if v.name == w then table.insert(f, v); break end end end
         else f = data end
-        extract(f, shell.resolve(path))
+        ar.extract(f, shell.resolve(path))
     else error("Unknown mode") end
 end
+
+return ar

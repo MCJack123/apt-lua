@@ -1,7 +1,7 @@
 -- Tape Archive (tar) archiver/unarchiver library (using UStar)
 -- Use in the shell or with os.loadAPI
 
-local function trim(s) return string.match(s, '^()[%s%\0]*$') and '' or string.match(s, '^[%s%\0]*(.*[^%s%\0])') end
+local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function u2cc(p) return bit.band(p, 0x1) * 8 + bit.band(p, 0x2) + bit.band(p, 0x4) / 4 + 4 end
 local function cc2u(p) return bit.band(p, 0x8) / 8 + bit.band(p, 0x2) + bit.band(p, 0x1) * 4 end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or str end
@@ -18,8 +18,10 @@ end
 local verbosity = 0
 local ignore_zero = false
 
+local tar = {}
+
 -- Converts a serial list of tar entries into a hierarchy
-function unserialize(data)
+function tar.unserialize(data)
     local retval = {}
     local links = {}
     for k,v in pairs(data) do
@@ -39,21 +41,20 @@ function unserialize(data)
 end
 
 -- Converts a hierarchy into a serial list of tar entries
-function serialize(data)
-    base = base or "."
+function tar.serialize(data)
     --if data["//"] == nil then error("Invalid directory " .. data.name) end
     local retval = (data["//"] ~= nil and #data["//"] > 0) and {data["//"]} or {}
     for k,v in pairs(data) do if k ~= "//" then
         if v["//"] ~= nil or v.name == nil then
             local t = table.maxn(retval)
-            for l,w in pairs(serialize(v)) do retval[t+l] = w end
+            for l,w in pairs(tar.serialize(v)) do retval[t+l] = w end
         else table.insert(retval, v) end
     end end
     return retval
 end
 
 -- Loads an archive into a table
-function load(path, noser, rawdata)
+function tar.load(path, noser, rawdata)
     if not fs.exists(path) and not rawdata then error("Path does not exist", 2) end
     local file 
     if rawdata then
@@ -130,17 +131,17 @@ function load(path, noser, rawdata)
         os.pullEvent()
     end
     file.close()
-    return noser and retval or unserialize(retval)
+    return noser and retval or tar.unserialize(retval)
 end
 
 -- Extracts files from a table or file to a directory
-function extract(data, path, link)
+function tar.extract(data, path, link)
     fs.makeDir(path)
     local links = {}
     for k,v in pairs(data) do if k ~= "//" then
         local p = fs.combine(path, k)
         if v["//"] ~= nil then 
-            local l = extract(v, p, kernel ~= nil) 
+            local l = tar.extract(v, p, kernel ~= nil) 
             if kernel then for l,w in pairs(l) do table.insert(links, w) end end
         elseif (v.type == 1 or v.type == 2) and kernel then table.insert(links, v)
         elseif v.type == 0 or v.type == 7 then
@@ -169,7 +170,7 @@ function extract(data, path, link)
 end
 
 -- Reads a file into a table entry
-function read(base, p)
+function tar.read(base, p)
     local file = fs.open(fs.combine(base, p), "rb")
     local retval = {
         name = p,
@@ -194,8 +195,8 @@ function read(base, p)
 end
 
 -- Packs files in a directory into a table
-function pack(base, path)
-    if not fs.isDir(base) then return read(base, path) end
+function tar.pack(base, path)
+    if not fs.isDir(base) then return tar.read(base, path) end
     local retval = {["//"] = {
         name = path .. "/",
         mode = fs.getPermissions and cc2u(fs.getPermissions(path, fs.getOwner(path) or 0)) * 0x40 + cc2u(fs.getPermissions(path, "*")) + bit.band(fs.getPermissions(path, "*"), 0x10) * 0x80 or 0x1FF,
@@ -204,7 +205,7 @@ function pack(base, path)
         timestamp = os.epoch and math.floor(os.epoch("utc") / 1000) or 0,
         type = 5,
         link = "",
-        ownerName = fs.getOwner and users.getShortName(fs.getOwner(p)) or "",
+        ownerName = fs.getOwner and users.getShortName(fs.getOwner(path)) or "",
         groupName = "",
         deviceNumber = nil,
         data = nil
@@ -214,16 +215,16 @@ function pack(base, path)
     if path and string.sub(path, -1) == "/" then path = string.sub(path, 1, -1) end
     local p = path and (base .. "/" .. path) or base
     for k,v in pairs(fs.list(p)) do
-        if fs.isDir(fs.combine(p, v)) then retval[v] = pack(base, path and (path .. "/" .. v) or v)
-        else retval[v] = read(base, path and (path .. "/" .. v) or v) end
+        if fs.isDir(fs.combine(p, v)) then retval[v] = tar.pack(base, path and (path .. "/" .. v) or v)
+        else retval[v] = tar.read(base, path and (path .. "/" .. v) or v) end
         if verbosity > 0 then print(fs.combine(p, v) .. " => " .. (path and (path .. "/" .. v) or v)) end
     end
     return retval
 end
 
 -- Saves a table to an archive file
-function save(data, path, noser)
-    if not noser then data = serialize(data) end
+function tar.save(data, path, noser)
+    if not noser then data = tar.serialize(data) end
     local nosave = path == nil
     local file 
     local seek = 0
@@ -304,7 +305,7 @@ local function CurrentTime(unixTime)
     }
 end
 
-if shell then
+if pcall(require, "tar") then
     local args = {...}
     local arch = nil
     local files = {}
@@ -438,8 +439,8 @@ if shell then
         else return load(shell.resolve(arch), noser) end
     end
     local function saveFile(data)
-        if not compress and arch then save(data, shell.resolve(arch)) else
-            local retval = save(data, nil)
+        if not compress and arch then tar.save(data, shell.resolve(arch)) else
+            local retval = tar.save(data, nil)
             if compress then retval = LibDeflate:CompressGzip(retval) end
             if outdir == 0 then write(retval)
             elseif retval then
@@ -500,8 +501,8 @@ if shell then
                 }]]} end
                 d = d[v]
             end
-            if string.sub(v, 1, 1) == "/" then d[components[#components]] = (norecurse and read or pack)("/", string.sub(v, 2))
-            else d[components[#components]] = (norecurse and read or pack)(shell.dir(), v) end
+            if string.sub(v, 1, 1) == "/" then d[components[#components]] = (norecurse and tar.read or tar.pack)("/", string.sub(v, 2))
+            else d[components[#components]] = (norecurse and tar.read or tar.pack)(shell.dir(), v) end
             if delete then fs.delete(shell.resolve(v)) end
         end
         saveFile(data)
@@ -511,8 +512,8 @@ if shell then
         if arch == nil and outdir ~= 0 then err("You must specify an archive with -f <output.tar> or -O.") end
         local data = loadFile(true)
         for k,v in pairs(files) do
-            if string.sub(v, 1, 1) == "/" then table.insert(data, (norecurse and read or pack)("/", string.sub(v, 2)))
-            else table.insert(data, (norecurse and read or pack)(shell.dir(), v)) end
+            if string.sub(v, 1, 1) == "/" then table.insert(data, (norecurse and tar.read or tar.pack)("/", string.sub(v, 2)))
+            else table.insert(data, (norecurse and tar.read or tar.pack)(shell.dir(), v)) end
             if delete then fs.delete(shell.resolve(v)) end
         end
         saveFile(data)
@@ -552,22 +553,22 @@ if shell then
                     timestamp = os.epoch and math.floor(os.epoch("utc") / 1000) or 0,
                     type = 5,
                     link = "",
-                    ownerName = fs.getOwner and users.getShortName(fs.getOwner(p)) or "",
+                    ownerName = fs.getOwner and users.getShortName(fs.getOwner(path)) or "",
                     groupName = "",
                     deviceNumber = nil,
                     data = nil
                 }} end
                 d = d[v]
             end
-            if string.sub(v, 1, 1) == "/" then d[components[#components]] = (norecurse and read or pack)("/", string.sub(v, 2))
-            else d[components[#components]] = (norecurse and read or pack)(shell.dir(), v) end
+            if string.sub(v, 1, 1) == "/" then d[components[#components]] = (norecurse and tar.read or tar.pack)("/", string.sub(v, 2))
+            else d[components[#components]] = (norecurse and tar.read or tar.pack)(shell.dir(), v) end
             if delete then fs.delete(shell.resolve(v)) end
         end
         saveFile(data)
     elseif mode == 6 then --extract
         if arch == nil then err("You must specify an archive with -f <file.tar>.") end
         local data = loadFile()
-        extract(data, shell.dir())
+        tar.extract(data, shell.dir())
     elseif mode == 7 then --delete
         if arch == nil then err("You must specify an archive with -f <file.tar>.") end
         local data = loadFile(true)
@@ -579,3 +580,5 @@ if shell then
     else err("You must specify one of -Acdrtux, see --help for details.") end
     shell.setDir(olddir)
 end
+
+return tar

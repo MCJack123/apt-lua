@@ -110,7 +110,7 @@ elseif mode == 2 then -- list
     end
     textutils.tabulate(keys, vals)
 elseif mode == 3 then -- test
-    local gzip, err = LibDeflate:DecompressGzip(str)
+    local gzip, err = LibDeflate:DecompressGzip(readInput())
     if gzip == nil then
         if err == -2 then error(input .. ": invalid compressed data--crc error")
         elseif err == -1 then error(input .. ": not in gzip format")

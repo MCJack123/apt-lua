@@ -7,9 +7,11 @@
 --
 -- Copyright (c) 2019 JackMacWindows.
 
-admindir = "/var/lib/dpkg"
+local dpkg_divert = {}
 
-function parse()
+dpkg_divert.admindir = "/var/lib/dpkg"
+
+function dpkg_divert.parse()
     local file = io.open(fs.combine(admindir, "diversions"), "r")
     local l = 1
     local retval = {}
@@ -25,8 +27,8 @@ function parse()
     return retval
 end
 
-function get(file, package) 
-    local retval = parse()[file]
+function dpkg_divert.get(file, package) 
+    local retval = dpkg_divert.parse()[file]
     if not retval or retval.package == package then return nil end
     return retval
 end
@@ -42,19 +44,19 @@ local function save(data)
     file.close()
 end
 
-function add(old, new, package)
-    local d = parse()
+function dpkg_divert.add(old, new, package)
+    local d = dpkg_divert.parse()
     d[old] = {name = new or old .. ".distrib", package = package or ":"}
     save(d)
 end
 
-function remove(old)
-    local d = parse()
+function dpkg_divert.remove(old)
+    local d = dpkg_divert.parse()
     d[old] = nil
     save(d)
 end
 
-if shell then
+if pcall(require, "dpkg-divert") then
     local args = {}
     local mode = 0
     local instdir = "/"
@@ -66,9 +68,9 @@ if shell then
     local nextarg = nil
     for k,v in pairs({...}) do
         if nextarg then
-            if nextarg == 0 then admindir = v
+            if nextarg == 0 then dpkg_divert.admindir = v
             elseif nextarg == 1 then instdir = v
-            elseif nextarg == 2 then instdir = v; admindir = fs.combine(v, "var/lib/dpkg")
+            elseif nextarg == 2 then instdir = v; dpkg_divert.admindir = fs.combine(v, "var/lib/dpkg")
             elseif nextarg == 3 then new = v
             elseif nextarg == 4 then package = v end
             nextarg = nil
@@ -102,33 +104,35 @@ Commands:
         new = new or args[1] .. ".distrib"
         if package == ":" and not quiet then print("Adding 'local diversion of " .. args[1] .. " to " .. new .. "'")
         elseif not quiet then print("Adding 'diversion of " .. args[1] .. " to " .. new .. " by " .. package .. "'") end
-        if not test then add(args[1], new, package) end
+        if not test then dpkg_divert.add(args[1], new, package) end
         if rename then fs.move(args[1], new) end
     elseif mode == 1 then
         if #args < 1 then error("Usage: dpkg-divert [options...] --remove <file>") end
-        local d = parse()
+        local d = dpkg_divert.parse()
         if d[args[1]] == nil then return end
         if package == ":" and not quiet then print("Removing 'local diversion of " .. args[1] .. " to " .. d[args[1]].name .. "'")
         elseif not quiet then print("Removing 'diversion of " .. args[1] .. " to " .. d[args[1]].name .. " by " .. d[args[1]].package .. "'") end
-        if not test then remove(old) end
+        if not test then dpkg_divert.remove(args[1]) end
         if rename then fs.move(d[args[1]].name, args[1]) end
     elseif mode == 2 then
         if quiet then return end
         if #args < 1 then error("Usage: dpkg-divert [options...] --list <glob>") end
         args[1] = string.gsub(args[1], "%*", "%.%*")
-        for k,v in pairs(parse()) do if string.match(k, args[1]) then
+        for k,v in pairs(dpkg_divert.parse()) do if string.match(k, args[1]) then
             if v.package == ":" then print("local diversion of " .. k .. " to " .. v.name)
             else print("diversion of " .. k .. " to " .. v.name .. " by " .. v.package) end
         end end
     elseif mode == 3 then
         if quiet then return end
         if #args < 1 then error("Usage: dpkg-divert [options...] --listpackage <file>") end
-        local p = parse()[args[1]]
+        local p = dpkg_divert.parse()[args[1]]
         if p ~= nil then if p.package == ":" then print("LOCAL") else print(p.package) end end
     elseif mode == 4 then
         if quiet then return end
         if #args < 1 then error("Usage: dpkg-divert [options...] --truename <file>") end
-        local p = parse()[args[1]]
+        local p = dpkg_divert.parse()[args[1]]
         if p == nil then print(args[1]) else print(p.name) end
     end
 end
+
+return dpkg_divert

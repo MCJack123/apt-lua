@@ -5,9 +5,11 @@
 --
 -- Copyright (c) 2019 JackMacWindows.
 
-local function trim(s) return string.match(s, '^()[%s%\0]*$') and '' or string.match(s, '^[%s%\0]*(.*[^%s%\0])') end
+local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 
-function parseControl(data)
+local dpkg_control = {}
+
+function dpkg_control.parseControl(data)
     local retval = {}
     local last_key = nil
     for line in string.gmatch(data, "[^\n]+") do
@@ -24,7 +26,7 @@ function parseControl(data)
     return retval
 end
 
-function parseControlList(data)
+function dpkg_control.parseControlList(data)
     local retval = {}
     local sections = {}
     local s = 1
@@ -32,11 +34,11 @@ function parseControlList(data)
         if line == "\n" or line == "" then s = s + 1
         else sections[s] = (sections[s] or "") .. line end
     end
-    for k,v in pairs(sections) do table.insert(retval, parseControl(v)) end
+    for k,v in pairs(sections) do table.insert(retval, dpkg_control.parseControl(v)) end
     return retval
 end
 
-function parseDependencies(deps)
+function dpkg_control.parseDependencies(deps)
     local retval = {}
     for dep in string.gmatch(deps, "[^,]+") do
         dep = trim(dep)
@@ -65,3 +67,5 @@ function parseDependencies(deps)
     end
     return retval
 end
+
+return dpkg_control

@@ -6,16 +6,18 @@
 --
 -- Copyright (c) 2019 JackMacWindows.
 
-os.loadAPI("apt-lua/dpkg-control.lua")
+local dpkg_control = require "dpkg-control"
 
-local function trim(s) return string.match(s, '^()[%s%\0]*$') and '' or string.match(s, '^[%s%\0]*(.*[^%s%\0])') end
+local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or string.sub(str, 1, len) end
-local dpkg_control = _G["dpkg-control"]
-admindir = "/var/lib/dpkg"
-fs.makeDir(admindir)
 
-function readDatabase()
-    local file = io.open(fs.combine(admindir, "status"), "r")
+local dpkg_query = {}
+dpkg_query.admindir = "/var/lib/dpkg"
+if not fs.isDir(dpkg_query.admindir) then fs.makeDir(dpkg_query.admindir) end
+
+function dpkg_query.readDatabase()
+    local file = io.open(fs.combine(dpkg_query.admindir, "status"), "r")
+    if file == nil then error("Couldn't find status file") end
     local retval = {{}}
     local last_key = nil
     local s = 1
@@ -43,7 +45,8 @@ function readDatabase()
 end
 
 local function readAvailable()
-    local file = io.open(fs.combine(admindir, "available"), "r")
+    local file = io.open(fs.combine(dpkg_query.admindir, "available"), "r")
+    if file == nil then error("Couldn't find status file") end
     local retval = {{}}
     local last_key = nil
     local s = 1
@@ -70,9 +73,10 @@ local function readAvailable()
     return realretval
 end
 
-function writeDatabase(data)
-    fs.copy(fs.combine(admindir, "status"), fs.combine(admindir, "status-old"))
-    local file = fs.open(fs.combine(admindir, "status"), "w")
+function dpkg_query.writeDatabase(data)
+    fs.copy(fs.combine(dpkg_query.admindir, "status"), fs.combine(dpkg_query.admindir, "status-old"))
+    local file = fs.open(fs.combine(dpkg_query.admindir, "status"), "w")
+    if file == nil then error("Couldn't find status file") end
     local function check(v) if type(v) == "table" then return v.Short .. "\n " .. string.gsub(v.Long, "\n\n", "\n .\n") else return v end end
     for k,v in pairs(data) do
         for l,w in pairs(v) do file.writeLine(k .. ": " .. check(v)) end
@@ -81,13 +85,13 @@ function writeDatabase(data)
     file.close()
 end
 
-function findPackage(name)
-    local db = readDatabase()
-    for k,v in pairs(db) do if string.match(k, name) then return v end end
+function dpkg_query.findPackage(name)
+    local db = dpkg_query.readDatabase()
+    for k,v in pairs(db) do if string.match(k, "^" .. name .. "$") then return v end end
     return nil
 end
 
-if shell then
+if pcall(require, "dpkg-query") then
     local args = {}
     local mode = nil
     local showformat = "${Package}\t${Version}\n"
@@ -120,7 +124,7 @@ Commands:
     -?, --help                       Show this help message.
         --version                    Show the version.]]); return 2
         elseif v == "--version" then print("dpkg-query v1.0\nPart of apt-lua for CraftOS\nCopyright (c) 2019 JackMacWindows."); return 2
-        elseif string.find(v, "--admindir=") == 1 then admindir = string.sub(v, 12)
+        elseif string.find(v, "--admindir=") == 1 then dpkg_query.admindir = string.sub(v, 12)
         elseif v == "--load-avail" then load_avail = true
         elseif string.find(v, "--showformat=") == 1 then showformat = string.sub(v, 14)
         elseif v == "-f" then nextarg = true
@@ -130,7 +134,7 @@ Commands:
     if mode == 0 then
         local pattern = nil
         if args[1] ~= nil then pattern = string.gsub(args[1], "%*", ".+") end
-        local db = readDatabase()
+        local db = dpkg_query.readDatabase()
         local function printPackage(v)
             local state = ""
             if string.find(v.Status, "^install ") then state = "i"
@@ -156,7 +160,7 @@ Commands:
     elseif mode == 1 then
         local pattern = nil
         if args[1] ~= nil then pattern = string.gsub(args[1], "%*", ".+") end
-        local db = readDatabase()
+        local db = dpkg_query.readDatabase()
         local function printPackage(v)
             local state = ""
             if string.find(v.Status, "^install ") then state = "i"
@@ -181,7 +185,7 @@ Commands:
         else for k,v in pairs(db) do if string.find(v.Status, " config-files") == nil and string.find(v.Status, " not-installed") == nil then printPackage(v) end end end
     elseif mode == 2 then
         if #args < 1 then error("Usage: dpkg-query [options...] --status <package-name...>") end
-        local db = readDatabase()
+        local db = dpkg_query.readDatabase()
         local function check(v) if type(v) == "table" then return v.Short .. "\n" .. string.gsub(v.Long, "\n\n", "\n .\n") else return v end end
         for _,a in pairs(args) do
             for k,v in pairs(db) do if k == a then
@@ -192,13 +196,13 @@ Commands:
         end
     elseif mode == 3 then
         if #args < 1 then error("Usage: dpkg-query [options...] --listfiles <package-name...>") end
-        local db = readDatabase()
+        local db = dpkg_query.readDatabase()
         for _,a in pairs(args) do
             local path
-            if fs.exists(fs.combine(admindir, "info/" .. a .. ".list")) then path = fs.combine(admindir, "info/" .. a .. ".list")
+            if fs.exists(fs.combine(dpkg_query.admindir, "info/" .. a .. ".list")) then path = fs.combine(dpkg_query.admindir, "info/" .. a .. ".list")
             else for k,v in pairs(db) do if k == a then
-                if not fs.exists(fs.combine(admindir, "info/" .. a .. "!" .. v.Architecture .. ".list")) then error("Could not find list of files for " .. a) end
-                path = fs.combine(admindir, "info/" .. a .. "!" .. v.Architecture .. ".list")
+                if not fs.exists(fs.combine(dpkg_query.admindir, "info/" .. a .. "!" .. v.Architecture .. ".list")) then error("Could not find list of files for " .. a) end
+                path = fs.combine(dpkg_query.admindir, "info/" .. a .. "!" .. v.Architecture .. ".list")
                 break
             end end end
             local file = fs.open(path, "r")
@@ -208,18 +212,18 @@ Commands:
     elseif mode == 4 then
         if #args < 1 then error("Usage: dpkg-query [options...] --control-list <package-name>") end
         local files = {}
-        for k,v in pairs(fs.list(fs.combine(admindir, "info"))) do 
-            if string.match(v, "^" .. string.gsub(args[1], "%-", "%%-") .. "%..+") then table.insert(files, fs.combine(admindir, "info/" .. v)) end
+        for k,v in pairs(fs.list(fs.combine(dpkg_query.admindir, "info"))) do 
+            if string.match(v, "^" .. string.gsub(args[1], "%-", "%%-") .. "%..+") then table.insert(files, fs.combine(dpkg_query.admindir, "info/" .. v)) end
             if k % 1000 == 0 then
                 os.queueEvent("nosleep")
                 os.pullEvent()
             end
         end
         if #files == 0 then
-            local db = readDatabase()
+            local db = dpkg_query.readDatabase()
             for k,v in pairs(db) do if k == args[1] then 
                 local mstr = "^" .. string.gsub(args[1], "%-", "%%-") .. "!" .. v.Architecture .. "%.(.+)"
-                for l,w in pairs(fs.list(fs.combine(admindir, "info"))) do 
+                for l,w in pairs(fs.list(fs.combine(dpkg_query.admindir, "info"))) do 
                     if string.match(w, mstr) then table.insert(files, string.match(w, mstr)) end
                     if l % 1000 == 0 then
                         os.queueEvent("nosleep")
@@ -232,15 +236,15 @@ Commands:
         for k,v in pairs(files) do if v ~= "list" then print(v) end end
     elseif mode == 5 then
         if #args < 2 then error("Usage: dpkg-query [options...] --control-show <package-name> <control-file>") end
-        if fs.exists(fs.combine(admindir, "info/" .. args[1] .. "." .. args[2])) then
-            local file = fs.open(fs.combine(admindir, "info/" .. args[1] .. "." .. args[2]), "r")
+        if fs.exists(fs.combine(dpkg_query.admindir, "info/" .. args[1] .. "." .. args[2])) then
+            local file = fs.open(fs.combine(dpkg_query.admindir, "info/" .. args[1] .. "." .. args[2]), "r")
             print(file.readAll())
             file.close()
         else
-            local db = readDatabase()
+            local db = dpkg_query.readDatabase()
             for k,v in pairs(db) do if k == args[1] then 
-                if fs.exists(fs.combine(admindir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2])) then
-                    local file = fs.open(fs.combine(admindir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2]), "r")
+                if fs.exists(fs.combine(dpkg_query.admindir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2])) then
+                    local file = fs.open(fs.combine(dpkg_query.admindir, "info/" .. args[1] .. "!" .. v.Architecture .. "." .. args[2]), "r")
                     print(file.readAll())
                     file.close()
                 end
@@ -257,7 +261,7 @@ Commands:
         if string.find(args[1], "[%*%[%?/]") ~= 1 then pattern = ".*" .. pattern .. ".*"
         elseif string.find(args[1], "[%*%[%?/]") == nil then plain = true 
         else pattern = "^" .. pattern .. "$" end
-        local files = fs.find(fs.combine(admindir, "info/*.list"))
+        local files = fs.find(fs.combine(dpkg_query.admindir, "info/*.list"))
         print("Searching...")
         for k,v in pairs(files) do
             local file = io.open(v, "r")
@@ -283,3 +287,5 @@ Commands:
         end
     else error("Usage: dpkg-query [options...] <command>") end
 end
+
+return dpkg_query

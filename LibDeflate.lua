@@ -3570,7 +3570,7 @@ the entire preset dictionary.
 -- support ComputerCraft shell
 local arg = _G.arg
 local debug = debug
-if shell then 
+if pcall(require, "LibDeflate") then 
     arg = {...} 
     arg[0] = "LibDeflate.lua"
     debug = {getinfo = function()

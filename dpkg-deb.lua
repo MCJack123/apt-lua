@@ -6,19 +6,20 @@
 --
 -- Copyright (c) 2019 JackMacWindows.
 
-os.loadAPI("apt-lua/ar.lua")
-os.loadAPI("apt-lua/tar.lua")
-os.loadAPI("apt-lua/dpkg-control.lua")
-_G.LibDeflate = dofile("apt-lua/LibDeflate.lua")
-_G.md5 = dofile("apt-lua/md5.lua")
+local ar = require "ar"
+local tar = require "tar"
+local dpkg_control = require "dpkg-control"
+local LibDeflate = dofile("apt-lua/LibDeflate.lua")
+local md5 = dofile("apt-lua/md5.lua")
 
-local function trim(s) return string.match(s, '^()[%s%\0]*$') and '' or string.match(s, '^[%s%\0]*(.*[^%s%\0])') end
+local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or str end
 local function lpad(str, len, c) return string.len(str) < len and string.rep(c or " ", len - string.len(str)) .. string.sub(str, 1, len) or str end
 local verbose = false
-local dpkg_control = _G["dpkg-control"]
 
-function load(path, noser, gettar)
+local dpkg_deb = {}
+
+function dpkg_deb.load(path, noser, gettar)
     if verbose then print("Loading package...") end
     local arch = ar.load(path)
     if arch == nil then error("Invalid deb file", 2) end
@@ -145,7 +146,7 @@ local function CurrentTime(unixTime)
     }
 end
 
-if shell then
+if pcall(require, "dpkg-deb") then
     local mode = nil
     local tarextract = false
     local compress_level = 5
@@ -242,7 +243,7 @@ Commands:
         if verbose then print("Compressing archives...") end
         local control_tar_gz = LibDeflate:CompressGzip(control_tar, {level=uniform_compression and compress_level or 5})
         os.queueEvent(os.pullEvent())
-        local data_tar_gz = LibDeflate:CompressGzip(data_tar_gz, {level=compress_level})
+        local data_tar_gz = LibDeflate:CompressGzip(data_tar, {level=compress_level})
         os.queueEvent(os.pullEvent())
         if verbose then print("Writing package...") end
         ar.save({
@@ -324,3 +325,5 @@ Commands:
         if mode ~= 5 then if tarextract then print(deb[1]) else extract(deb.control_archive, mode == 7 and fs.combine(out, "DEBIAN") or out) end end
     else error("Usage: dpkg-deb [options...] <command>") end
 end
+
+return dpkg_deb
