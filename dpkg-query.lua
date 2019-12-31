@@ -11,7 +11,7 @@ local dpkg_control = require "dpkg-control"
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or string.sub(str, 1, len) end
 
-local dpkg_query = {}
+local dpkg_query = {status = {}}
 dpkg_query.admindir = "/var/lib/dpkg"
 if not fs.isDir(dpkg_query.admindir) then fs.makeDir(dpkg_query.admindir) end
 
@@ -77,28 +77,38 @@ function dpkg_query.writeDatabase(data)
     fs.copy(fs.combine(dpkg_query.admindir, "status"), fs.combine(dpkg_query.admindir, "status-old"))
     local file = fs.open(fs.combine(dpkg_query.admindir, "status"), "w")
     if file == nil then error("Couldn't find status file") end
-    local function check(v) if type(v) == "table" then return v.Short .. "\n " .. string.gsub(v.Long, "\n\n", "\n .\n") else return v end end
+    local function check(v) if type(v) == "table" then return (v.Short or "") .. "\n " .. string.gsub(v.Long or "", "\n\n", "\n .\n") else return v end end
     for k,v in pairs(data) do
-        for l,w in pairs(v) do file.writeLine(k .. ": " .. check(v)) end
+        file.writeLine("Package: " .. k)
+        for l,w in pairs(v) do if l ~= "Package" and l ~= "Description" then file.writeLine(l .. ": " .. check(w)) end end
+        file.writeLine("Description: " .. check(v.Description))
         file.writeLine("")
     end
     file.close()
 end
 
-function dpkg_query.findPackage(name)
-    local db = dpkg_query.readDatabase()
+function dpkg_query.findPackage(name, db)
+    db = db or dpkg_query.readDatabase()
     for k,v in pairs(db) do if string.match(k, "^" .. name .. "$") then return v end end
     return nil
 end
+
+function dpkg_query.status.configured(state) return state == "triggers-pending" or state == "installed" end
+function dpkg_query.status.present(state) return state ~= "not-installed" and state ~= "config-files" and state ~= "half-installed" end
+function dpkg_query.status.needs_configure(state) return state == "config-failed" or state == "half-configured" or state == "unpacked" end
 
 if pcall(require, "dpkg-query") then
     local args = {}
     local mode = nil
     local showformat = "${Package}\t${Version}\n"
     local load_avail = false
-    local nextarg = false
+    local nextarg
     for k,v in pairs({...}) do
-        if nextarg then showformat = v; nextarg = false
+        if nextarg then 
+            if nextarg == 0 then showformat = v
+            elseif nextarg == 1 then dpkg_query.admindir = v
+            elseif nextarg == 2 then showformat = v end
+            nextarg = nil
         elseif v == "-l" or v == "--list" then mode = 0
         elseif v == "-W" or v == "--show" then mode = 1
         elseif v == "-s" or v == "--status" then mode = 2
@@ -125,9 +135,11 @@ Commands:
         --version                    Show the version.]]); return 2
         elseif v == "--version" then print("dpkg-query v1.0\nPart of apt-lua for CraftOS\nCopyright (c) 2019 JackMacWindows."); return 2
         elseif string.find(v, "--admindir=") == 1 then dpkg_query.admindir = string.sub(v, 12)
+        elseif v == "--admindir" then nextarg = 1
         elseif v == "--load-avail" then load_avail = true
         elseif string.find(v, "--showformat=") == 1 then showformat = string.sub(v, 14)
-        elseif v == "-f" then nextarg = true
+        elseif v == "--showformat" then nextarg = 2
+        elseif v == "-f" then nextarg = 0
         else table.insert(args, v) end
     end
     showformat = string.gsub(string.gsub(showformat, "\\n", "\n"), "\\t", "\t")
