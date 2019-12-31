@@ -97,7 +97,7 @@ function dpkg_query.status.configured(state) return state == "triggers-pending" 
 function dpkg_query.status.present(state) return state ~= "not-installed" and state ~= "config-files" and state ~= "half-installed" end
 function dpkg_query.status.needs_configure(state) return state == "config-failed" or state == "half-configured" or state == "unpacked" end
 
-if pcall(require, "dpkg-query") then
+if shell and pcall(require, "dpkg-query") then
     local args = {}
     local mode = nil
     local showformat = "${Package}\t${Version}\n"

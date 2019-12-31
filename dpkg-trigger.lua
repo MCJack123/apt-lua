@@ -221,9 +221,9 @@ function dpkg_trigger.commit(package, triggerdb, packagedb)
     return ok and 1 or 0, triggerdb, packagedb
 end
 
-if pcall(require, "dpkg-trigger") then
+if shell and pcall(require, "dpkg-trigger") then
     local args = {}
-    local package = DPKG_MAINTSCRIPT_PACKAGE
+    local package = _ENV.DPKG_MAINTSCRIPT_PACKAGE
     local await = true
     local act = true
     local nextarg

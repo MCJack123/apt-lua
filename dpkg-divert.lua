@@ -12,7 +12,7 @@ local dpkg_divert = {}
 dpkg_divert.admindir = "/var/lib/dpkg"
 
 function dpkg_divert.parse()
-    local file = io.open(fs.combine(admindir, "diversions"), "r")
+    local file = io.open(fs.combine(dpkg_divert.admindir, "diversions"), "r")
     local l = 1
     local retval = {}
     local name
@@ -34,8 +34,8 @@ function dpkg_divert.get(file, package)
 end
 
 local function save(data)
-    fs.copy(fs.combine(admindir, "diversions"), fs.combine(admindir, "diversions-old"))
-    local file = io.open(fs.combine(admindir, "diversions"), "w")
+    fs.copy(fs.combine(dpkg_divert.admindir, "diversions"), fs.combine(dpkg_divert.admindir, "diversions-old"))
+    local file = io.open(fs.combine(dpkg_divert.admindir, "diversions"), "w")
     for k,v in pairs(data) do
         file.writeLine(k)
         file.writeLine(v.name)
@@ -56,7 +56,7 @@ function dpkg_divert.remove(old)
     save(d)
 end
 
-if pcall(require, "dpkg-divert") then
+if shell and pcall(require, "dpkg-divert") then
     local args = {}
     local mode = 0
     local instdir = "/"

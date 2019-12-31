@@ -15,6 +15,8 @@ local md5 = dofile("apt-lua/md5.lua")
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or str end
 local function lpad(str, len, c) return string.len(str) < len and string.rep(c or " ", len - string.len(str)) .. string.sub(str, 1, len) or str end
+local function u2cc(p) return bit.band(p, 0x1) * 8 + bit.band(p, 0x2) + bit.band(p, 0x4) / 4 + 4 end
+local function cc2u(p) return bit.band(p, 0x8) / 8 + bit.band(p, 0x2) + bit.band(p, 0x1) * 4 end
 local verbose = false
 
 local dpkg_deb = {}
@@ -67,6 +69,7 @@ function dpkg_deb.load(path, noser, gettar)
     if control.postinst ~= nil then retval.postinst = control.postinst.data end
     if control.postrm ~= nil then retval.postrm = control.postrm.data end
     if control.config ~= nil then retval.config = control.config.data end
+    if control.triggers ~= nil then retval.triggers = control.triggers.data end
     if control.templates ~= nil then 
         retval.templates = dpkg_control.parseControlList(control.templates.data)
         for k,v in pairs(retval.templates) do 
@@ -146,7 +149,7 @@ local function CurrentTime(unixTime)
     }
 end
 
-if pcall(require, "dpkg-deb") then
+if shell and pcall(require, "dpkg-deb") then
     local mode = nil
     local tarextract = false
     local compress_level = 5
