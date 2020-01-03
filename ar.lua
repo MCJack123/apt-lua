@@ -88,7 +88,7 @@ function ar.extract(data, path)
     if not fs.exists(path) then fs.makeDir(path) end
     for k,v in pairs(data) do
         local p = fs.combine(path, v.name)
-        write(v, p)
+        ar.write(v, p)
     end
 end
 
@@ -256,10 +256,10 @@ if pcall(require, "ar") then
                 table.insert(tmp, p)
             end
             for k,v in pairs(tmp) do
-                for l,w in pairs(v) do _G.write(pad(w, max[l])) end
+                for l,w in pairs(v) do write(pad(w, max[l])) end
                 print("")   
             end
-        else for k,v in pairs(data) do print(k) end end
+        else for k,v in pairs(data) do print(v.name) end end
     elseif mode == 5 then
         local path = #files > 0 and table.remove(files, 1) or "."
         local f

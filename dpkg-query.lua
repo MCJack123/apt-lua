@@ -11,7 +11,16 @@ local dpkg_control = require "dpkg-control"
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or string.sub(str, 1, len) end
 
-local dpkg_query = {status = {}}
+local dpkg_query = {status = {
+    not_installed = 1,
+    config_files = 2,
+    half_installed = 3,
+    unpacked = 4,
+    half_configured = 5,
+    triggers_awaited = 6,
+    triggers_pending = 7,
+    installed = 8
+}}
 dpkg_query.admindir = "/var/lib/dpkg"
 if not fs.isDir(dpkg_query.admindir) then fs.makeDir(dpkg_query.admindir) end
 
@@ -89,13 +98,29 @@ end
 
 function dpkg_query.findPackage(name, db)
     db = db or dpkg_query.readDatabase()
-    for k,v in pairs(db) do if string.match(k, "^" .. name .. "$") then return v end end
-    return nil
+    for k,v in pairs(db) do if name == k then return v, db end end
+    return nil, db
+end
+
+function dpkg_query.readFileLists()
+    local retval = {duplicates = {}}
+    for _,v in ipairs(fs.find(fs.combine(dpkg_query.admindir, "info/*.list"))) do
+        local pkg = string.match(v, "info/(.+)%.list$")
+        local file = io.open(v, "r")
+        for line in file:lines() do
+            if retval[line] ~= nil and not fs.isDir(line) then 
+                retval.duplicates[line] = retval.duplicates[line] or {}
+                table.insert(retval.duplicates[line], pkg)
+            else retval[line] = pkg end
+        end
+    end
+    return retval
 end
 
 function dpkg_query.status.configured(state) return state == "triggers-pending" or state == "installed" end
 function dpkg_query.status.present(state) return state ~= "not-installed" and state ~= "config-files" and state ~= "half-installed" end
 function dpkg_query.status.needs_configure(state) return state == "config-failed" or state == "half-configured" or state == "unpacked" end
+function dpkg_query.status.get_number(state) for k,v in ipairs({"not-installed", "config-files", "half-installed", "unpacked", "half-configured", "triggers-awaited", "triggers-pending", "installed"}) do if v == state then return k end end return nil end
 
 if shell and pcall(require, "dpkg-query") then
     local args = {}

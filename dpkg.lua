@@ -38,6 +38,7 @@ local tar = require "tar"
 local dpkg = {}
 dpkg.admindir = "/var/lib/dpkg"
 dpkg.print = print
+dpkg.warn = function(text) print("dpkg: warning: " .. text) end
 dpkg.error = function(text)
     term.blit("dpkg: error: ", "000000eeeee00", "fffffffffffff")
     print(text)
@@ -83,9 +84,9 @@ dpkg.package = class "package" {
         packagedb = nil,
         triggerdb = nil,
         filedb = nil,
-        setPackageDB = function(db) dpkg.package.packagedb = db end,
-        setTriggerDB = function(db) dpkg.package.triggerdb = db end,
-        setFileDB = function(db) dpkg.package.filedb = db end
+        setPackageDB = function(db) dpkg.package.packagedb = db or dpkg_query.readDatabase() end,
+        setTriggerDB = function(db) dpkg.package.triggerdb = db or dpkg_trigger.readDatabase() end,
+        setFileDB = function(db) dpkg.package.filedb = db or dpkg_query.readFileLists() end,
     },
     __init = function(path)
         if fs.exists(path) then 
@@ -125,8 +126,10 @@ dpkg.package = class "package" {
     end,
     callMaintainerScript = function(script, ...)
         if self.isUnpacked or string.sub(script, 1, 1) == "." then
+            if not fs.exists(dir("info/" .. self.name .. "." .. string.gsub(script, "^%.", ""))) then return true end
             return shell.run(dir("info/" .. self.name .. "." .. string.gsub(script, "^%.", "")), ...)
         else
+            if not fs.exists(dir("tmp.ci/" .. script)) then return true end
             return shell.run(dir("tmp.ci/" .. script), ...)
         end
     end,
@@ -139,11 +142,31 @@ dpkg.package = class "package" {
         if fs.isDir(dir("tmp.ci")) then fs.delete(dir("tmp.ci")) end
         tar.extract(self.controlArchive, dir("tmp.ci"))
         dpkg.print("Preparing to unpack " .. self.path .. " ...")
+        -- Check pre-dependencies
+        local predepend_errors = {}
+        if self.control["Pre-Depends"] ~= nil then
+            for _,v in ipairs(split(self.control["Pre-Depends"], ",")) do
+                local ok, name = dpkg.checkDependency(v, function(state, package)
+                    return dpkg_query.status.configured(state) or (package["Config-Version"] ~= nil and dpkg_query.status.present(state))
+                end)
+                if not ok then table.insert(predepend_errors, {name, trim(v)}) end
+            end
+        end
+        if #predepend_errors > 0 then
+            dpkg.error("dependency problems prevent unpacking of " .. self.name .. ":")
+            for _,v in ipairs(predepend_errors) do dpkg.print(" " .. self.name .. " pre-depends on " .. v[1] .. "; however:\n  Package " .. v[2] .. " is not installed.") end
+            return false
+        end
         -- Is this an upgrade?
-        if dpkg.package.packagedb[self.name] ~= nil and string.match(dpkg.package.packagedb[self.name], "%S+ %S+ (%S+)") == "installed" then
-            if getStatus(dpkg.package.packagedb[self.name], 1) == "hold" and not dpkg.options.force_hold then
-                dpkg.error("package is held, use --force-hold to ignore")
-                return false
+        if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) == "installed" then
+            if getStatus(dpkg.package.packagedb[self.name], 1) == "hold" then
+                if dpkg.options.force_hold then
+                    dpkg.warn("overriding problem because --force enabled:")
+                    dpkg.warn("package is currently held")
+                else
+                    dpkg.error("package is currently held")
+                    return false
+                end
             end
             dpkg.debug("Upgrading pre-existing package (" .. dpkg.package.packagedb[self.name].Version .. " => " .. self.control.Version .. ")")
             -- Call old prerm with `upgrade <new version>`
@@ -170,9 +193,55 @@ dpkg.package = class "package" {
         end
         -- Deconfigure each package that is conflicting
         local conflicts = {}
-        if self.control.Breaks ~= nil then for _,v in ipairs(split(self.control.Breaks, ",")) do conflicts[v] = 0 end end
-        if self.control.Conflicts ~= nil then for _,v in ipairs(split(self.control.Conflicts, ",")) do conflicts[v] = 1 end end
-    end
+        local match, name
+        if self.control.Breaks ~= nil then for _,v in ipairs(split(self.control.Breaks, ",")) do match, name = dpkg.checkDependency(v); if match then conflicts[name] = 0 end end end
+        if self.control.Conflicts ~= nil then for _,v in ipairs(split(self.control.Conflicts, ",")) do match, name = dpkg.checkDependency(v, true); if match then conflicts[name] = 1 end end end
+        local found, removed = next(conflicts) and true or false, conflicts
+        while found do
+            local errors, newremoved = {}, {}
+            found = false
+            for k,v in pairs(dpkg.package.packagedb) do
+                for l,w in pairs(removed) do
+                    if (v.Depends and dpkg.findRelationship(l, dpkg.package.packagedb[l].Version, v.Depends)) or (v["Pre-Depends"] and dpkg.findRelationship(l, dpkg.package.packagedb[l].Version, v["Pre-Depends"])) then
+                        found = true
+                        newremoved[k] = (v["Pre-Depends"] and dpkg.findRelationship(l, dpkg.package.packagedb[l].Version, v["Pre-Depends"])) and 1 or 0
+                        local deconf = dpkg.package(k)
+                        dpkg.debug("Deconfiguring " .. k .. " since it depends on conflicting package " .. l)
+                        if deconf.prerm then
+                            if deconf.callMaintainerScript("prerm", "deconfigure", "in-favour", self.name, self.control.Version, "removing", l, dpkg.package.packagedb[l].Version) then
+                                v["Config-Version"] = v.Version
+                                updateStatus(v, 3, "unpacked")
+                            else
+                                dpkg.debug("Deconfigure failed, aborting.")
+                                if deconf.callMaintainerScript("postinst", "abort-deconfigure", "in-favour", self.name, self.control.Version, "removing", l, dpkg.package.packagedb[l].Version) then
+                                    updateStatus(v, 3, "installed")
+                                else
+                                    updateStatus(v, 3, "half-configured")
+                                end
+                                table.insert(errors, {k, l})
+                            end
+                        else
+                            v["Config-Version"] = v.Version
+                            updateStatus(v, 3, "unpacked") 
+                        end
+                    end
+                end
+            end
+            if #errors > 0 then
+                dpkg.error("dependency problems prevent unpacking of " .. self.name .. ":")
+                for _,v in ipairs(errors) do
+                    dpkg.print(" " .. v[1] .. " depends on " .. v[2] .. " which conflicts with " .. self.name .. ", however:")
+                    dpkg.print("  deconfiguring " .. v[1] .. " failed")
+                end
+                fs.delete(dir("tmp.ci"))
+                return false
+            end
+            removed = newremoved
+        end
+        for k,v in pairs(conflicts) do
+            
+        end
+    end,
 }
 _G.package = package_old
 
@@ -228,14 +297,39 @@ function dpkg.compareVersions(a, b)
     return 0
 end
 
+-- Takes a package name, version, and a relationship string (Depends, Breaks, etc.) and returns whether the relationship applies to the package
+function dpkg.findRelationship(package, pkgversion, relationship)
+    local version, comparison
+    relationship = string.match(trim(relationship), "^(" .. package .. "%s+%([<=>][<=>]?%s*[^ )]+%))") or 
+                   string.match(trim(relationship), "[, ](" .. package .. "%s+%([<=>][<=>]?%s*[^ )]+%))") or 
+                   string.match(trim(relationship), "^(" .. package .. ")%s*,") or 
+                   string.match(trim(relationship), "[, ](" .. package .. ")%s*,") or 
+                   string.match(trim(relationship), "^(" .. package .. ")$") or 
+                   string.match(trim(relationship), "[, ](" .. package .. ")$")
+    if relationship == nil then return false end
+    if string.match(relationship, "%S+%s+%([<=>][<=>]?%s*[^ )]+%)") then
+        relationship, comparison, version = string.match(relationship, "(%S+)%s+%(([<=>][<=>]?)%s*([^ )]+)%)")
+        if not ({["<<"] = true, ["<="] = true, ["="] = true, [">="] = true, [">>"] = true})[comparison] then return nil end
+    end
+    if version and comparison then
+        local res = dpkg.compareVersions(pkgversion, version)
+        return (comparison == "<<" and res == -1) or
+               (comparison == "<=" and res ~= 1) or
+               (comparison == "=" and res == 0) or
+               (comparison == ">=" and res ~= -1) or
+               (comparison == ">>" and res == 1)
+    else return true end
+end
+
 -- Takes a string in the form of "package-name[ ({<< | <= | = | >= | >>} version)]", returns whether the dependency can be satisfied
 -- Set unpacked to true to return true if it's unpacked, returns configured otherwise
+-- unpacked may also be a function that takes a state and the package and returns whether it is valid
 -- Returns whether a dependency was found, and if so its name
 function dpkg.checkDependency(dep, unpacked)
     local version, comparison
     dep = trim(dep)
     if string.match(dep, "%S+%s+%([<=>][<=>]?%s*[^ )]+%)") then
-        dep, version, comparison = string.match(dep, "(%S+)%s+%(([<=>][<=>]?)%s*([^ )]+)%)")
+        dep, comparison, version = string.match(dep, "(%S+)%s+%(([<=>][<=>]?)%s*([^ )]+)%)")
         if not ({["<<"] = true, ["<="] = true, ["="] = true, [">="] = true, [">>"] = true})[comparison] then return nil end
     end
     local pkgs = {}
@@ -250,17 +344,20 @@ function dpkg.checkDependency(dep, unpacked)
         end
     end end
     for _,pkgt in ipairs(pkgs) do
-        if dpkg_query.status.configured(getStatus(pkgt[1], 3)) or (unpacked and dpkg_query.status.present(getStatus(pkgt[1], 3))) then return true end
-        if version and comparison then
-            local res = dpkg.compareVersions(pkgt[2], version)
-            if (comparison == "<<" and res == -1) or
-            (comparison == "<=" and res ~= 1) or
-            (comparison == "=" and res == 0) or
-            (comparison == ">=" and res ~= -1) or
-            (comparison == ">>" and res == 1) then return true, pkgt[1].Name end
+        if dpkg_query.status.configured(getStatus(pkgt[1], 3)) or 
+           (unpacked == true and dpkg_query.status.present(getStatus(pkgt[1], 3))) or
+           (type(unpacked) == "function" and unpacked(getStatus(pkgt[1], 3), pkgt[1])) then
+            if version and comparison then
+                local res = dpkg.compareVersions(pkgt[2], version)
+                if (comparison == "<<" and res == -1) or
+                (comparison == "<=" and res ~= 1) or
+                (comparison == "=" and res == 0) or
+                (comparison == ">=" and res ~= -1) or
+                (comparison == ">>" and res == 1) then return true, pkgt[1].Package end
+            else return true, pkgt[1].Package end
         end
     end
-    return false
+    return false, dep
 end
 
 return dpkg

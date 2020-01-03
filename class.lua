@@ -17,7 +17,7 @@ local function defineClass(name, meta, def)
         local omt, supers = {}, {}
         local obj = setmetatable({__class = name}, omt)
         if meta.extends and not __init then if meta.extends[1] then for i,v in ipairs(meta.extends) do supers[i] = v() end omt.__index = function(self, name) for i,v in ipairs(supers) do if v[name] then return v[name] end end end else omt.__index = meta.extends(...) end end
-        for k,v in pairs(def) do if type(v) == "function" then obj[k] = function(...) _wrap_method(obj, v, ...) end elseif k ~= "__class" then obj[k] = v end if metamethods[k] then omt[k] = obj[k]; obj[k] = nil end end
+        for k,v in pairs(def) do if type(v) == "function" then obj[k] = function(...) return _wrap_method(obj, v, ...) end elseif k ~= "__class" then obj[k] = v end if metamethods[k] then omt[k] = obj[k]; obj[k] = nil end end
         if __init then 
             local env = getfenv(__init)
             env.self = obj
