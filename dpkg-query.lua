@@ -87,12 +87,12 @@ function dpkg_query.writeDatabase(data)
     local file = fs.open(fs.combine(dpkg_query.admindir, "status"), "w")
     if file == nil then error("Couldn't find status file") end
     local function check(v) if type(v) == "table" then return (v.Short or "") .. "\n " .. string.gsub(v.Long or "", "\n\n", "\n .\n") else return v end end
-    for k,v in pairs(data) do
+    for k,v in pairs(data) do if not (string.match(v.Status, "(%S+) %S+ %S+") == "unknown" and string.match(v.Status, "%S+ %S+ (%S+)") == "not-installed") then
         file.writeLine("Package: " .. k)
         for l,w in pairs(v) do if l ~= "Package" and l ~= "Description" then file.writeLine(l .. ": " .. check(w)) end end
         file.writeLine("Description: " .. check(v.Description))
         file.writeLine("")
-    end
+    end end
     file.close()
 end
 

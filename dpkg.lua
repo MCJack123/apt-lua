@@ -75,7 +75,11 @@ end
 self = {} -- to silence IDE warnings
 
 dpkg.options = {
-    force_hold = false,
+
+}
+
+dpkg.force = {
+    hold = false,
 }
 
 local package_old = _G.package
@@ -125,6 +129,7 @@ dpkg.package = class "package" {
         else error("Could not find package " .. path) end
     end,
     callMaintainerScript = function(script, ...)
+        -- TODO: Add unwind scripts to track actions
         if self.isUnpacked or string.sub(script, 1, 1) == "." then
             if not fs.exists(dir("info/" .. self.name .. "." .. string.gsub(script, "^%.", ""))) then return true end
             return shell.run(dir("info/" .. self.name .. "." .. string.gsub(script, "^%.", "")), ...)
@@ -153,14 +158,38 @@ dpkg.package = class "package" {
             end
         end
         if #predepend_errors > 0 then
-            dpkg.error("dependency problems prevent unpacking of " .. self.name .. ":")
-            for _,v in ipairs(predepend_errors) do dpkg.print(" " .. self.name .. " pre-depends on " .. v[1] .. "; however:\n  Package " .. v[2] .. " is not installed.") end
-            return false
+            if dpkg.force.depends then
+                dpkg.warn("overriding problem because --force enabled:")
+                dpkg.warn("dependency problems prevent unpacking of " .. self.name .. ":")
+                for _,v in ipairs(predepend_errors) do dpkg.print(" " .. self.name .. " pre-depends on " .. v[1] .. "; however:\n  Package " .. v[2] .. " is not installed.\n") end
+            else
+                dpkg.error("dependency problems prevent unpacking of " .. self.name .. ":")
+                for _,v in ipairs(predepend_errors) do dpkg.print(" " .. self.name .. " pre-depends on " .. v[1] .. "; however:\n  Package " .. v[2] .. " is not installed.\n") end
+                return false
+            end
+        end
+        -- Check if any packages conflict with this one
+        local breaks_errors = {}
+        for k,v in pairs(dpkg.package.packagedb) do
+            if v.Conflicts and dpkg_query.status.present(getStatus(v.Status, 3)) and dpkg.findRelationship(self.name, self.control.Version, v.Conflicts) then
+                table.insert(breaks_errors, k)
+            end
+        end
+        if #breaks_errors > 0 then
+            if dpkg.force.conflicts then
+                dpkg.warn("overriding problem because --force enabled:")
+                dpkg.warn("conflicting packages prevent unpacking of " .. self.name .. ":")
+                for _,v in ipairs(breaks_errors) do dpkg.print(" " .. v .. " conflicts with " .. self.name .. ", however:\n  Package " .. self.name .. " (" .. self.control.Version .. ") is being installed.\n") end
+            else
+                dpkg.error("conflicting packages prevent unpacking of " .. self.name .. ":")
+                for _,v in ipairs(breaks_errors) do dpkg.print(" " .. v .. " conflicts with " .. self.name .. ", however:\n  Package " .. self.name .. " (" .. self.control.Version .. ") is being installed.\n") end
+                return false
+            end
         end
         -- Is this an upgrade?
         if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) == "installed" then
             if getStatus(dpkg.package.packagedb[self.name], 1) == "hold" then
-                if dpkg.options.force_hold then
+                if dpkg.force.hold then
                     dpkg.warn("overriding problem because --force enabled:")
                     dpkg.warn("package is currently held")
                 else
@@ -193,9 +222,11 @@ dpkg.package = class "package" {
         end
         -- Deconfigure each package that is conflicting
         local conflicts = {}
-        local match, name
-        if self.control.Breaks ~= nil then for _,v in ipairs(split(self.control.Breaks, ",")) do match, name = dpkg.checkDependency(v); if match then conflicts[name] = 0 end end end
-        if self.control.Conflicts ~= nil then for _,v in ipairs(split(self.control.Conflicts, ",")) do match, name = dpkg.checkDependency(v, true); if match then conflicts[name] = 1 end end end
+        do
+            local match, name
+            if self.control.Breaks ~= nil then for _,v in ipairs(split(self.control.Breaks, ",")) do match, name = dpkg.checkDependency(v); if match then conflicts[name] = 0 end end end
+            if self.control.Conflicts ~= nil then for _,v in ipairs(split(self.control.Conflicts, ",")) do match, name = dpkg.checkDependency(v, true); if match then conflicts[name] = 1 end end end
+        end
         local found, removed = next(conflicts) and true or false, conflicts
         while found do
             local errors, newremoved = {}, {}
@@ -211,6 +242,7 @@ dpkg.package = class "package" {
                             if deconf.callMaintainerScript("prerm", "deconfigure", "in-favour", self.name, self.control.Version, "removing", l, dpkg.package.packagedb[l].Version) then
                                 v["Config-Version"] = v.Version
                                 updateStatus(v, 3, "unpacked")
+                                -- TODO: add prerm
                             else
                                 dpkg.debug("Deconfigure failed, aborting.")
                                 if deconf.callMaintainerScript("postinst", "abort-deconfigure", "in-favour", self.name, self.control.Version, "removing", l, dpkg.package.packagedb[l].Version) then
@@ -238,8 +270,103 @@ dpkg.package = class "package" {
             end
             removed = newremoved
         end
-        for k,v in pairs(conflicts) do
-            
+        local conflict_errors = {}
+        for k,v in pairs(conflicts) do if k ~= self.name then
+            local deconf = dpkg.package(k)
+            dpkg.debug("Deconfiguring " .. k .. " since it conflicts with the current package")
+            if deconf.callMaintainerScript("prerm", "deconfigure", "in-favour", self.name, self.control.Version) then
+                dpkg.package.packagedb[k]["Config-Version"] = dpkg.package.packagedb[k].Version
+                updateStatus(dpkg.package.packagedb[k], 3, "unpacked")
+                if v == 1 then
+                    updateStatus(dpkg.package.packagedb[k], 3, "half-installed")
+                    if not deconf.callMaintainerScript("prerm", "remove", "in-favour", self.name, self.control.Version) then
+                        dpkg.debug("Pre-remove failed, aborting.")
+                        if deconf.callMaintainerScript("postinst", "abort-remove", "in-favour", self.name, self.control.Version) then
+                            updateStatus(dpkg.package.packagedb[k], 3, "unpacked")
+                        end
+                        table.insert(conflict_errors, k)
+                    end
+                end
+            else
+                dpkg.debug("Deconfigure failed, aborting.")
+                if deconf.callMaintainerScript("postinst", "abort-deconfigure", "in-favour", self.name, self.control.Version) then
+                    updateStatus(dpkg.package.packagedb[k], 3, "installed")
+                else
+                    updateStatus(dpkg.package.packagedb[k], 3, "half-configured")
+                end
+                table.insert(conflict_errors, k)
+            end
+        end end
+        if #conflict_errors > 0 then
+            dpkg.error("dependency problems prevent unpacking of " .. self.name .. ":")
+            for _,v in ipairs(conflict_errors) do
+                dpkg.print(" " .. v[1] .. " depends on " .. v[2] .. " which conflicts with " .. self.name .. ", however:")
+                dpkg.print("  deconfiguring " .. v[1] .. " failed")
+            end
+            fs.delete(dir("tmp.ci"))
+            return false
+        end
+        -- Call new preinst
+        -- Is this an upgrade?
+        if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) ~= "not-installed" then
+            -- Are there config files still installed?
+            if getStatus(dpkg.package.packagedb[self.name], 3) ~= "config-files" then
+                -- Upgrade
+                dpkg.debug("Upgrading from " .. dpkg.package.packagedb[self.name].Version .. " to " .. self.control.Version)
+                if not self.callMaintainerScript("preinst", "upgrade", dpkg.package.packagedb[self.name].Version) then
+                    dpkg.debug("New preinst upgrade failed")
+                    if self.callMaintainerScript("postrm", "abort-upgrade", dpkg.package.packagedb[self.name].Version) then
+                        if self.callMaintainerScript(".postinst", "abort-upgrade", self.control.Version) then
+                            dpkg.debug("Leaving package as-is")
+                            dpkg.error("package pre-install script failed to upgrade, leaving old version installed")
+                            updateStatus(dpkg.package.packagedb[self.name], 3, "installed")
+                            return false
+                        else
+                            dpkg.debug("Old postinst abort-upgrade failed")
+                            dpkg.error("package pre-install script failed to upgrade, and previous version failed to revert changes")
+                            updateStatus(dpkg.package.packagedb[self.name], 3, "unpacked")
+                            return false
+                        end
+                    else
+                        dpkg.debug("New postrm abort-upgrade failed")
+                        dpkg.error("package pre-install script failed to run")
+                        updateStatus(dpkg.package.packagedb[self.name], 3, "half-installed")
+                        return false
+                    end
+                end
+            else
+                -- Install with config files
+                dpkg.debug("Installing with config files")
+                if not self.callMaintainerScript("preinst", "install", dpkg.package.packagedb[self.name]["Config-Version"]) then
+                    dpkg.debug("Preinst install failed")
+                    if self.callMaintainerScript("postrm", "abort-install", dpkg.package.packagedb[self.name]["Config-Version"]) then
+                        dpkg.error("package pre-install script failed to install")
+                        updateStatus(dpkg.package.packagedb[self.name], 3, "config-files")
+                        return false
+                    else
+                        dpkg.error("package pre-install script failed to run, reinstallation required")
+                        updateStatus(dpkg.package.packagedb[self.name], 2, "reinstreq")
+                        updateStatus(dpkg.package.packagedb[self.name], 3, "half-installed")
+                        return false
+                    end
+                end
+            end
+        else
+            -- New install
+            dpkg.debug("Installing new")
+            if not self.callMaintainerScript("preinst", "install") then
+                dpkg.debug("Preinst install failed")
+                if self.callMaintainerScript("postrm", "abort-install") then
+                    dpkg.error("package pre-install script failed to install")
+                    updateStatus(dpkg.package.packagedb[self.name], 3, "config-files")
+                    return false
+                else
+                    dpkg.error("package pre-install script failed to run, reinstallation required")
+                    updateStatus(dpkg.package.packagedb[self.name], 2, "reinstreq")
+                    updateStatus(dpkg.package.packagedb[self.name], 3, "half-installed")
+                    return false
+                end
+            end
         end
     end,
 }
