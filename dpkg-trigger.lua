@@ -114,7 +114,7 @@ function dpkg_trigger.activate(name, package, await, triggerdb, packagedb)
             packagedb[package]["Triggers-Awaited"] = (packagedb[package]["Triggers-Awaited"] or "") .. (packagedb[package]["Triggers-Awaited"] and " " or "") .. interest.package
         end
         packagedb[interest.package]["Triggers-Pending"] = (packagedb[interest.package]["Triggers-Pending"] or "") .. (packagedb[interest.package]["Triggers-Pending"] and " " or "") .. name
-        dpkg_query.writeDatabase(packagedb)
+        --dpkg_query.writeDatabase(packagedb)
         local unlock = dpkg_trigger.lock()
         local file = io.open(dir("triggers/Unincorp"), "r")
         local out = fs.open(dir("triggers/Unincorp.new"), "w")
@@ -161,7 +161,7 @@ function dpkg_trigger.activate(name, package, await, triggerdb, packagedb)
             end
         end
         file:close()
-        dpkg_query.writeDatabase(packagedb)
+        --dpkg_query.writeDatabase(packagedb)
         local unlock = dpkg_trigger.lock()
         file = io.open(dir("triggers/Unincorp"), "r")
         local out = fs.open(dir("triggers/Unincorp.new"), "w")
@@ -217,7 +217,7 @@ function dpkg_trigger.commit(package, triggerdb, packagedb)
     fs.delete(dir("triggers/Unincorp"))
     fs.move(dir("triggers/Unincorp.new"), dir("triggers/Unincorp"))
     unlock()
-    dpkg_query.writeDatabase(packagedb)
+    --dpkg_query.writeDatabase(packagedb)
     return ok and 1 or 0, triggerdb, packagedb
 end
 

@@ -47,7 +47,7 @@ function tar.serialize(data)
     for k,v in pairs(data) do if k ~= "//" then
         if v["//"] ~= nil or v.name == nil then
             local t = table.maxn(retval)
-            for l,w in pairs(tar.serialize(v)) do retval[t+l] = w end
+            for l,w in ipairs(tar.serialize(v)) do retval[t+l] = w end
         else table.insert(retval, v) end
     end end
     return retval

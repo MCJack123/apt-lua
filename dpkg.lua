@@ -14,6 +14,7 @@ local dpkg_deb = require "dpkg-deb"
 local dpkg_divert = require "dpkg-divert"
 local dpkg_query = require "dpkg-query"
 local dpkg_trigger = require "dpkg-trigger"
+local md5 = require "md5"
 local tar = require "tar"
 
 --[[ Actions:
@@ -37,6 +38,7 @@ local tar = require "tar"
 
 local dpkg = {}
 dpkg.admindir = "/var/lib/dpkg"
+dpkg.write = write
 dpkg.print = print
 dpkg.warn = function(text) print("dpkg: warning: " .. text) end
 dpkg.error = function(text)
@@ -58,6 +60,16 @@ local function readLines(path)
     local retval = {}
     for l in io.lines(path) do table.insert(retval, l) end
     return retval
+end
+local function writeFile(path, data)
+    local file = fs.open(path, "w")
+    file.write(data)
+    file.close()
+end
+local function writeLines(path, lines)
+    local file = fs.open(path, "w")
+    for _,v in ipairs(lines) do file.writeLine(v) end
+    file.close()
 end
 local function getStatus(package, id) return ({string.match(package.Status, "(%S+) (%S+) (%S+)")})[id] end
 local function updateStatus(package, id, status)
@@ -88,13 +100,14 @@ dpkg.package = class "package" {
         packagedb = nil,
         triggerdb = nil,
         filedb = nil,
+        filecount = 0,
         setPackageDB = function(db) dpkg.package.packagedb = db or dpkg_query.readDatabase() end,
         setTriggerDB = function(db) dpkg.package.triggerdb = db or dpkg_trigger.readDatabase() end,
-        setFileDB = function(db) dpkg.package.filedb = db or dpkg_query.readFileLists() end,
+        setFileDB = function(db, count) if db then dpkg.package.filedb, dpkg.package.filecount = db, count else dpkg.package.filedb, dpkg.package.filecount = dpkg_query.readFileLists() end end,
     },
     __init = function(path)
         if fs.exists(path) then 
-            local deb = dpkg_deb.load(path)
+            local deb = dpkg_deb.load(path, true)
             self.isUnpacked = false
             self.name = deb.name
             self.path = fs.getName(path)
@@ -368,6 +381,168 @@ dpkg.package = class "package" {
                 end
             end
         end
+        -- Unpack files
+        dpkg.print("Unpacking " .. self.name .. " (" .. self.control.Version .. ") ...")
+        self.filelist = {}
+        local replaced = {}
+        local installed_size = 0
+        local function unpack_rollback()
+            for _,v in ipairs(self.filelist) do if not fs.isDir(v) then
+                fs.delete(v .. ".dpkg-new")
+                if fs.exists(v .. ".dpkg-old") then fs.move(v .. ".dpkg-old", v) end
+            end end
+            self.filelist = nil
+            if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) ~= "not-installed" then
+                if getStatus(dpkg.package.packagedb[self.name], 3) ~= "config-files" then
+                    if self.callMaintainerScript("postrm", "abort-upgrade", dpkg.package.packagedb[self.name].Version) then
+                        if self.callMaintainerScript(".postinst", "abort-upgrade", self.control.Version) then
+                            updateStatus(dpkg.package.packagedb[self.name], 3, "installed")
+                            return false
+                        else
+                            dpkg.error("previous version failed to revert changes")
+                            updateStatus(dpkg.package.packagedb[self.name], 3, "unpacked")
+                            return false
+                        end
+                    else
+                        dpkg.error("package post-removal script failed to run")
+                        updateStatus(dpkg.package.packagedb[self.name], 3, "half-installed")
+                        return false
+                    end
+                else
+                    if self.callMaintainerScript("postrm", "abort-install", dpkg.package.packagedb[self.name]["Config-Version"]) then
+                        updateStatus(dpkg.package.packagedb[self.name], 3, "config-files")
+                        return false
+                    else
+                        dpkg.error("package post-remove script failed to run, reinstallation required")
+                        updateStatus(dpkg.package.packagedb[self.name], 2, "reinstreq")
+                        updateStatus(dpkg.package.packagedb[self.name], 3, "half-installed")
+                        return false
+                    end
+                end
+            else
+                if self.callMaintainerScript("postrm", "abort-install") then
+                    updateStatus(dpkg.package.packagedb[self.name], 3, "config-files")
+                    return false
+                else
+                    dpkg.error("package post-removal script failed to run, reinstallation required")
+                    updateStatus(dpkg.package.packagedb[self.name], 2, "reinstreq")
+                    updateStatus(dpkg.package.packagedb[self.name], 3, "half-installed")
+                    return false
+                end
+            end
+        end
+        for _,v in ipairs(self.files) do
+            local k = v.name:gsub("^./+", "/"):gsub("^[^/]", "/%1")
+            dpkg.debug("Writing " .. k)
+            if (dpkg.package.filedb[k] ~= nil and dpkg.package.filedb[k] ~= self.name) and not fs.isDir(k) then
+                if not (self.control.Replaces and dpkg.findRelationship(dpkg.package.filedb[k], dpkg.package.packagedb[dpkg.package.filedb[k]].Version, self.control.Replaces)) then
+                    dpkg.print(("dpkg: error processing archive %s:\n trying to overwrite '%s', which is also in package %s %s"):format(self.path, k, dpkg.package.filedb[k], dpkg.package.packagedb[dpkg.package.filedb[k]].Version))
+                    return unpack_rollback()
+                else
+                    replaced[dpkg.package.filedb[k]] = replaced[dpkg.package.filedb[k]] or {}
+                    table.insert(replaced[dpkg.package.filedb[k]], k)
+                end
+            end
+            if v.type == 5 then fs.makeDir(k)
+            elseif v.type == 0 then
+                if self.md5sums and self.md5sums[k:gsub("^/+", "")] and md5.sumhexa(v.data) ~= self.md5sums[k:gsub("^/+", "")] then
+                    dpkg.debug(("Invalid checksum for file %s (expected %s, got %s)"):format(k, self.md5sums[k:gsub("^/+", "")], md5.sumhexa(v.data)))
+                    dpkg.warn("invalid checksum for file " .. k) -- maybe error?
+                end
+                installed_size = installed_size + #v.data
+                if fs.exists(k) then fs.move(k, k .. ".dpkg-old") end
+                local file = fs.open(k .. ".dpkg-new", "wb")
+                if not file then
+                    dpkg.print(("dpkg: error processing archive %s:\n could not open destination file %s.dpkg-new for writing"):format(self.path, k))
+                    return unpack_rollback()
+                end
+                if file.seek then file.write(v.data)
+                else for c in string.gmatch(v.data, ".") do file.write(string.byte(c)) end end
+                file.close()
+            else dpkg.debug("Unknown type " .. v.type .. " for path " .. k) end
+            table.insert(self.filelist, k)
+            dpkg_trigger.activate(k, self.name, false, dpkg.package.triggerdb, dpkg.package.packagedb)
+        end
+        -- Run postrm
+        if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) ~= "not-installed" then
+            if not self.callMaintainerScript(".postrm", "upgrade", self.control.Version) and not self.callMaintainerScript("postrm", "failed-upgrade", dpkg.package.packagedb[self.name].Version) then
+                dpkg.debug("postrm upgrade failed")
+                if self.callMaintainerScript(".preinst", "abort-upgrade", self.control.Version) then
+                    dpkg.debug("Reverting changes")
+                    for _,v in ipairs(self.filelist) do if not fs.isDir(v) then
+                        fs.delete(v .. ".dpkg-new")
+                        if fs.exists(v .. ".dpkg-old") then fs.move(v .. ".dpkg-old", v) end
+                    end end
+                    self.filelist = nil
+                    if not self.callMaintainerScript("postrm", "abort-upgrade", dpkg.package.packagedb[self.name].Version) or not self.callMaintainerScript(".postinst", "abort-upgrade", self.control.Version) then
+                        dpkg.debug("postrm/.postinst abort-upgrade failed")
+                        dpkg.error("package postrm script failed to finish upgrade, and upgrade failed to abort")
+                        updateStatus(self.name, 3, "half-installed")
+                        return false
+                    end
+                    dpkg.error("package upgrade failed to finish")
+                    updateStatus(self.name, 3, "unpacked")
+                    return false
+                else
+                    dpkg.debug("preinst abort-upgrade failed")
+                    dpkg.error("package postrm script failed to finish upgrade, and preinst script failed to abort upgrade")
+                    updateStatus(self.name, 3, "half-installed")
+                    return false
+                end
+            end
+            -- Remove files deleted in the new version
+            local oldfiles = readLines(dir("info/" .. self.name .. ".list"))
+            for _,v in pairs(oldfiles) do 
+                local found = false
+                for _,w in ipairs(self.filelist) do if v == w then
+                    found = true
+                    break
+                end end
+                if not found then 
+                    dpkg.debug("Deleting removed file " .. v)
+                    fs.delete(v) 
+                end
+            end
+        end
+        -- Replace old file lists and maintainer scripts
+        writeLines(dir("info/" .. self.name .. ".list"), self.filelist)
+        if self.conffiles then writeLines(dir("info/" .. self.name .. ".conffiles"), self.conffiles) end
+        if self.md5sums then
+            local file = fs.open(dir("info/" .. self.name .. ".md5sums"), "w")
+            for k,v in pairs(self.md5sums) do file.writeLine(v .. "  " .. k) end
+            file.close()
+        end
+        for _,v in ipairs {"postinst", "postrm", "preinst", "prerm", "triggers"} do if self[v] then writeFile(dir("info/" .. self.name .. "." .. v), self[v]) end end
+        -- Fix file lists & move files into place
+        for k,v in pairs(replaced) do
+            local list = readLines(dir("info/" .. k .. ".list"))
+            for _,w in ipairs(v) do for i,x in ipairs(list) do if w == x then table.remove(list, i); break end end end
+            if #list == 0 then
+                dpkg.package(k).callMaintainerScript("postrm", "disappear", self.name, self.control.Version)
+                for _,w in ipairs {"conffiles", "md5sums", "postinst", "postrm", "preinst", "prerm", "triggers"} do fs.delete(dir("info/" .. k .. "." .. w)) end
+                dpkg.package.packagedb[k].Status = "purge ok not-installed"
+            else writeLines(dir("info/" .. k .. ".list"), list) end
+        end
+        for _,v in ipairs(self.filelist) do
+            dpkg.package.filedb[v] = self.name
+            if fs.exists(v .. ".dpkg-old") then fs.delete(v .. ".dpkg-old") end
+            if fs.exists(v .. ".dpkg-new") then fs.move(v .. ".dpkg-new", v) end
+        end
+        fs.delete(dir("tmp.ci"))
+        -- Update status file
+        dpkg.package.packagedb[self.name] = dpkg.package.packagedb[self.name] or {}
+        for k,v in pairs(self.control) do dpkg.package.packagedb[self.name][k] = v end
+        dpkg.package.packagedb[self.name]["Installed-Size"] = installed_size
+        dpkg.package.packagedb[self.name].Status = "install ok unpacked"
+        self.isUnpacked = true
+        -- Remove conflicting packages
+        for k,v in pairs(conflicts) do
+            -- deconfigure(k)
+            if v == 1 then 
+                -- remove(k)
+            end
+        end
+        return true
     end,
 }
 _G.package = package_old
@@ -485,6 +660,15 @@ function dpkg.checkDependency(dep, unpacked)
         end
     end
     return false, dep
+end
+
+-- Loads the databases.
+function dpkg.readDatabase()
+    dpkg.write("(Reading database ...")
+    dpkg.package.setPackageDB()
+    dpkg.package.setTriggerDB()
+    dpkg.package.setFileDB()
+    dpkg.print(" " .. dpkg.package.filecount .. " files and directories installed.)")
 end
 
 return dpkg

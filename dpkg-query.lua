@@ -104,6 +104,7 @@ end
 
 function dpkg_query.readFileLists()
     local retval = {duplicates = {}}
+    local count = 0
     for _,v in ipairs(fs.find(fs.combine(dpkg_query.admindir, "info/*.list"))) do
         local pkg = string.match(v, "info/(.+)%.list$")
         local file = io.open(v, "r")
@@ -111,10 +112,13 @@ function dpkg_query.readFileLists()
             if retval[line] ~= nil and not fs.isDir(line) then 
                 retval.duplicates[line] = retval.duplicates[line] or {}
                 table.insert(retval.duplicates[line], pkg)
-            else retval[line] = pkg end
+            else 
+                retval[line] = pkg 
+                count = count + 1
+            end
         end
     end
-    return retval
+    return retval, count
 end
 
 function dpkg_query.status.configured(state) return state == "triggers-pending" or state == "installed" end
