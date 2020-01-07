@@ -84,7 +84,13 @@ local function split(str, sep)
     return t
 end
 
-self = {} -- to silence IDE warnings
+local script_unwind = {
+    preinst = "postrm",
+    prerm = "postinst",
+    postrm = "preinst"
+}
+
+local self = {} -- to silence IDE warnings
 
 dpkg.options = {
 
@@ -101,9 +107,21 @@ dpkg.package = class "package" {
         triggerdb = nil,
         filedb = nil,
         filecount = 0,
+        scriptCallStack = {},
         setPackageDB = function(db) dpkg.package.packagedb = db or dpkg_query.readDatabase() end,
         setTriggerDB = function(db) dpkg.package.triggerdb = db or dpkg_trigger.readDatabase() end,
         setFileDB = function(db, count) if db then dpkg.package.filedb, dpkg.package.filecount = db, count else dpkg.package.filedb, dpkg.package.filecount = dpkg_query.readFileLists() end end,
+        unwindScriptErrors = function(completion)
+            local retval = true
+            while #dpkg.package.scriptCallStack > 0 do
+                local run = table.remove(dpkg.package.scriptCallStack)
+                local res = run.pkg.callMaintainerScript(script_unwind[run.script], "abort-" .. run.args[1], table.unpack(run.args, 2, run.args.n))
+                if completion then completion(run.pkg, res, run.script, table.unpack(run.args, 1, run.args.n)) end
+                if not res then retval = false end
+            end
+            return retval
+        end,
+        clearScriptErrors = function() dpkg.package.scriptCallStack = {} end,
     },
     __init = function(path)
         if fs.exists(path) then 
@@ -143,18 +161,30 @@ dpkg.package = class "package" {
     end,
     callMaintainerScript = function(script, ...)
         -- TODO: Add unwind scripts to track actions
-        if self.isUnpacked or string.sub(script, 1, 1) == "." then
-            if not fs.exists(dir("info/" .. self.name .. "." .. string.gsub(script, "^%.", ""))) then return true end
-            return shell.run(dir("info/" .. self.name .. "." .. string.gsub(script, "^%.", "")), ...)
-        else
-            if not fs.exists(dir("tmp.ci/" .. script)) then return true end
-            return shell.run(dir("tmp.ci/" .. script), ...)
-        end
+        local path, nostack = nil, false
+        if self.isUnpacked or string.sub(script, 1, 1) == '.' then path = dir("info/" .. self.name .. "." .. string.gsub(script, "^%.", ""))
+        else path = dir("tmp.ci/" .. script) end
+        if string.sub(script, #script) == '!' then nostack = true end
+        script = script:gsub("!$", "")
+        if not nostack and script:find("abort") == nil then table.insert(dpkg.package.scriptCallStack, {pkg = self, script = script, args = table.pack(...)}) end
+        script = script:gsub("^%.", "")
+        if not fs.exists(path) then return true end
+        return shell.run(path, ...)
     end,
     unpack = function()
+        local self = self
         if self.isUnpacked then 
             dpkg.error("internal error: attempted to unpack package without archive")
             return false
+        end
+        if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 1) == "hold" then
+            if dpkg.force.hold then
+                dpkg.warn("overriding problem because --force enabled:")
+                dpkg.warn("package is currently held")
+            else
+                dpkg.error("package is currently held")
+                return false
+            end
         end
         -- Write maintainer scripts to temp folder
         if fs.isDir(dir("tmp.ci")) then fs.delete(dir("tmp.ci")) end
@@ -201,24 +231,15 @@ dpkg.package = class "package" {
         end
         -- Is this an upgrade?
         if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) == "installed" then
-            if getStatus(dpkg.package.packagedb[self.name], 1) == "hold" then
-                if dpkg.force.hold then
-                    dpkg.warn("overriding problem because --force enabled:")
-                    dpkg.warn("package is currently held")
-                else
-                    dpkg.error("package is currently held")
-                    return false
-                end
-            end
             dpkg.debug("Upgrading pre-existing package (" .. dpkg.package.packagedb[self.name].Version .. " => " .. self.control.Version .. ")")
             -- Call old prerm with `upgrade <new version>`
             if not self.callMaintainerScript(".prerm", "upgrade", self.control.Version) then
                 dpkg.debug("Old package's prerm upgrade failed")
                 -- Call new prerm with `failed-upgrade <old version>`
-                if not self.callMaintainerScript("prerm", "failed-upgrade", dpkg.package.packagedb[self.name].Version) then
+                if not self.callMaintainerScript("prerm", "failed-upgrade!", dpkg.package.packagedb[self.name].Version) then
                     dpkg.debug("New package's prerm failed-upgrade failed")
                     -- Call old postinst with `abort-upgrade <new version>`
-                    if self.callMaintainerScript(".postinst", "abort-upgrade", self.control.Version) then
+                    if dpkg.package.unwindScriptErrors() then
                         -- Leave old package installed
                         dpkg.error("package pre-upgrade script failed to run")
                         updateStatus(dpkg.package.packagedb[self.name], 3, "installed")
@@ -257,12 +278,7 @@ dpkg.package = class "package" {
                                 updateStatus(v, 3, "unpacked")
                                 -- TODO: add prerm
                             else
-                                dpkg.debug("Deconfigure failed, aborting.")
-                                if deconf.callMaintainerScript("postinst", "abort-deconfigure", "in-favour", self.name, self.control.Version, "removing", l, dpkg.package.packagedb[l].Version) then
-                                    updateStatus(v, 3, "installed")
-                                else
-                                    updateStatus(v, 3, "half-configured")
-                                end
+                                dpkg.debug("Deconfigure failed.")
                                 table.insert(errors, {k, l})
                             end
                         else
@@ -278,6 +294,12 @@ dpkg.package = class "package" {
                     dpkg.print(" " .. v[1] .. " depends on " .. v[2] .. " which conflicts with " .. self.name .. ", however:")
                     dpkg.print("  deconfiguring " .. v[1] .. " failed")
                 end
+                dpkg.package.unwindScriptErrors(function(pkg, res, script)
+                    if pkg.name ~= self.name and script == "prerm" then
+                        if res then updateStatus(dpkg.package.packagedb[pkg.name], 3, "installed")
+                        else updateStatus(dpkg.package.packagedb[pkg.name], 3, "half-configured") end
+                    end
+                end)
                 fs.delete(dir("tmp.ci"))
                 return false
             end
@@ -294,19 +316,11 @@ dpkg.package = class "package" {
                     updateStatus(dpkg.package.packagedb[k], 3, "half-installed")
                     if not deconf.callMaintainerScript("prerm", "remove", "in-favour", self.name, self.control.Version) then
                         dpkg.debug("Pre-remove failed, aborting.")
-                        if deconf.callMaintainerScript("postinst", "abort-remove", "in-favour", self.name, self.control.Version) then
-                            updateStatus(dpkg.package.packagedb[k], 3, "unpacked")
-                        end
                         table.insert(conflict_errors, k)
                     end
                 end
             else
                 dpkg.debug("Deconfigure failed, aborting.")
-                if deconf.callMaintainerScript("postinst", "abort-deconfigure", "in-favour", self.name, self.control.Version) then
-                    updateStatus(dpkg.package.packagedb[k], 3, "installed")
-                else
-                    updateStatus(dpkg.package.packagedb[k], 3, "half-configured")
-                end
                 table.insert(conflict_errors, k)
             end
         end end
@@ -316,6 +330,16 @@ dpkg.package = class "package" {
                 dpkg.print(" " .. v[1] .. " depends on " .. v[2] .. " which conflicts with " .. self.name .. ", however:")
                 dpkg.print("  deconfiguring " .. v[1] .. " failed")
             end
+            dpkg.unwindScriptErrors(function(pkg, res, script, ...)
+                if pkg.name ~= self.name and script == "prerm" then
+                    if ... == "remove" then
+                        if res then updateStatus(dpkg.package.packagedb[pkg.name], 3, "unpacked") end
+                    elseif ... == "deconfigure" then
+                        if res then updateStatus(dpkg.package.packagedb[pkg.name], 3, "installed")
+                        else updateStatus(dpkg.package.packagedb[pkg.name], 3, "half-configured") end
+                    end
+                end
+            end)
             fs.delete(dir("tmp.ci"))
             return false
         end
