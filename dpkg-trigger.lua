@@ -107,7 +107,7 @@ function dpkg_trigger.activate(name, package, await, triggerdb, packagedb)
         await = await and interest.await
         packagedb = packagedb or dpkg_query.readDatabase()
         local selection, flag, state = string.match(packagedb[interest.package].Status, "([^ ]+) ([^ ]+) ([^ ]+)")
-        packagedb[interest.package].Status = selection .. " " .. flag .. " triggers-pending"
+        if state ~= "triggers-awaited" then packagedb[interest.package].Status = selection .. " " .. flag .. " triggers-pending" end
         selection, flag, state = string.match(packagedb[package].Status, "([^ ]+) ([^ ]+) ([^ ]+)")
         if await then 
             packagedb[package].Status = selection .. " " .. flag .. " triggers-awaited" 

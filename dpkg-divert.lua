@@ -27,8 +27,9 @@ function dpkg_divert.parse()
     return retval
 end
 
-function dpkg_divert.get(file, package) 
-    local retval = dpkg_divert.parse()[file]
+function dpkg_divert.get(file, package, db) 
+    db = db or dpkg_divert.parse()
+    local retval = db[file]
     if not retval or retval.package == package then return nil end
     return retval
 end
