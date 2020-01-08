@@ -98,6 +98,9 @@ dpkg.options = {
     triggers = true,
     pager = true,
     auto_deconfigure = false,
+    skip_same_version = false,
+    dry_run = false,
+    ignore_depends = {},
 }
 
 dpkg.force = {
@@ -1013,6 +1016,124 @@ function dpkg.readDatabase()
     dpkg.package.setTriggerDB()
     dpkg.package.setFileDB()
     dpkg.print(" " .. dpkg.package.filecount .. " files and directories installed.)")
+end
+
+--[[
+    Modes:
+    * 0 = install
+    * 1 = unpack
+    * 2 = configure
+    * 3 = triggers only
+    * 4 = remove
+    * 5 = purge
+    * 6 = verify
+    * 7 = audit
+    * 8 = get selections
+    * 9 = set selections
+    * 10 = clear selections
+    * 11 = validate
+    * 12 = compare versions
+    * 13 = dpkg-deb
+    * 14 = dpkg-query
+]]
+
+if shell and pcall(require, "dpkg") then
+    local args = {}
+    local mode = nil
+    local recursive = false
+    local only_selected = false
+    local validate_type = nil
+    local pre_invoke, post_invoke
+    local path_exclude, path_include
+    for _,v in ipairs({...}) do
+        if mode ~= nil then table.insert(args, v)
+elseif string.match(v, "^%-[^-]") then
+            local c = string.sub(v, 2, 2)
+            if c == 'i' then mode = 0
+            elseif c == 'r' then mode = 4
+            elseif c == 'P' then mode = 5
+            elseif c == 'V' then mode = 6
+            elseif c == 'C' then mode = 7
+            elseif c == '?' then print([[Temporary help string]]); return
+            elseif c == 'D' then -- TODO: add debug arguments
+            elseif c == 'b' or c == 'c' or c == 'e' or c == 'x' or c == 'X' or c == 'f' or c == 'I' then mode = 13
+            elseif c == 'l' or c == 's' or c == 'L' or c == 'S' or c == 'p' then mode = 14
+            elseif c == 'B' then dpkg.options.auto_deconfigure = true
+            elseif c == 'R' then recursive = true
+            elseif c == 'G' then dpkg.force.downgrade = false
+            elseif c == 'O' then only_selected = true
+            elseif c == 'E' then dpkg.options.skip_same_version = true end
+        else
+            local option
+            if string.find(v, "=") then v, option = string.match("^(.+)=(.+)$") end
+            if v == "--install" then mode = 0
+            elseif v == "--unpack" then mode = 1
+            elseif v == "--configure" then mode = 2
+            elseif v == "--triggers-only" then mode = 3
+            elseif v == "--remove" then mode = 4
+            elseif v == "--purge" then mode = 5
+            elseif v == "--verify" then mode = 6
+            elseif v == "--audit" then mode = 7
+            -- TODO: maybe add avail?
+            elseif v == "--get-selections" then mode = 8
+            elseif v == "--set-selections" then mode = 9
+            elseif v == "--clear-selections" then mode = 10
+            elseif v == "--print-architecture" then print("craftos"); return
+            elseif string.match(v, "^%-%-assert%-") then
+                if v == "--assert-support-predepends" then return 0
+                elseif v == "--assert-working-epoch" then return 0
+                elseif v == "--assert-long-filenames" then return 0
+                elseif v == "--assert-multi-conrep" then return 1
+                elseif v == "--assert-multi-arch" then return 1
+                elseif v == "--assert-versioned-provides" then return 0
+                else return 2 end
+            elseif string.match(v, "^%-%-validate%-") then mode = 11; validate_type = string.match("^%-%-validate%-(.+)")
+            elseif v == "--compare-verisons" then mode = 12
+            elseif v == "--help" then print([[Temporary help string]]); return
+            elseif v == "--force-help" then print([[Temporary force help string]]); return
+            elseif v == "--build" or v == "--contents" or v == "--control" or v == "--extract" or v == "--vextract" or v == "--field" or v == "--ctrl-tarfile" or v == "--fsys-tarfile" or v == "--info" then mode = 13
+            elseif v == "--list" or v == "--status" or v == "--listfiles" or v == "--search" or v == "--print-avail" then mode = 14
+            elseif v == "--auto-deconfigure" then dpkg.options.auto_deconfigure = true
+            elseif v == "--debug" then -- TODO: debug
+            elseif string.match(v, "^%-%-force%-") or string.match(v, "^%-%-no%-force%-") or string.match(v, "^%-%-refuse%-") then
+                local val = string.match(v, "^%-%-force%-") ~= nil
+                local thing = v:gsub("^%-%-force%-", ""):gsub("^%-%-no%-force%-", ""):gsub("^%-%-refuse%-", "")
+                if thing == "downgrade" then dpkg.force.downgrade = val
+                elseif thing == "configure-any" then dpkg.force.configure_any = val
+                elseif thing == "hold" then dpkg.force.hold = val
+                elseif thing == "remove-reinstreq" then dpkg.force.remove_reinstreq = val
+                elseif thing == "remove-essential" then dpkg.force.remove_essential = val
+                elseif thing == "depends" then dpkg.force.depends = val
+                elseif thing == "depends-version" then dpkg.force.depends_version = val
+                elseif thing == "breaks" then dpkg.force.breaks = val
+                elseif thing == "conflicts" then dpkg.force.conflicts = val
+                elseif thing == "confmiss" then dpkg.force.confmiss = val
+                elseif thing == "confnew" and dpkg.force.confmode ~= 2 then dpkg.force.confmode = 0
+                elseif thing == "confold" and dpkg.force.confmode ~= 2 then dpkg.force.confmode = 1
+                elseif thing == "confdef" then dpkg.force.confmode = 2
+                elseif thing == "confask" and dpkg.force.confmode == nil then dpkg.force.confmode = nil -- redundant
+                elseif thing == "overwrite" then dpkg.force.overwrite = val
+                elseif thing == "overwrite-dir" then dpkg.force.overwrite_dir = val
+                elseif thing == "overwrite-diverted" then dpkg.force.overwrite_diverted = val
+                elseif thing == "architecture" then dpkg.force.architecture = val
+                elseif thing == "bad-version" then dpkg.force.bad_version = val
+                elseif thing == "bad-verify" then dpkg.force.bad_verify = val end
+            elseif v == "--ignore-depends" then dpkg.options.ignore_depends = split(option, ",")
+            elseif v == "--no-act" or v == "--dry-run" or v == "--simulate" then dpkg.options.dry_run = true
+            elseif v == "--recursive" then recursive = true
+            elseif v == "--admindir" then dpkg.admindir, dpkg_divert.admindir, dpkg_query.admindir, dpkg_trigger.admindir = option, option, option, option
+            -- TODO: add instdir
+            elseif v == "--selected-only" then only_selected = true
+            elseif v == "--skip-same-verison" then dpkg.options.skip_same_version = true
+            elseif v == "--pre-invoke" then pre_invoke = option
+            elseif v == "--post-invoke" then post_invoke = option
+            elseif v == "--path-exclude" then path_exclude = option
+            elseif v == "--path-include" then path_include = option
+            elseif v == "--no-pager" then dpkg.options.pager = false
+            elseif v == "--no-triggers" then dpkg.options.triggers = false
+            elseif v == "--triggers" then dpkg.options.triggers = true end
+        end
+    end
 end
 
 return dpkg
