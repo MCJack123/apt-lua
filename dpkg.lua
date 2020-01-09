@@ -228,7 +228,7 @@ dpkg.package = class "package" {
         dpkg.print("Preparing to unpack " .. self.path .. " ...")
         -- Check if downgrading
         local downgrade = false
-        if dpkg.package.packagedb[self.name] ~= nil and dpkg.compareVersions(self.version, dpkg.package.packagedb[self.name].Version) == -1 then
+        if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) == "installed" and dpkg.compareVersions(self.version, dpkg.package.packagedb[self.name].Version) == -1 then
             if dpkg.force.downgrade then
                 dpkg.warn("overriding problem because --force enabled:")
                 dpkg.warn("downgrading " .. self.name .. " from " .. dpkg.package.packagedb[self.name].Version .. " to " .. self.Version)
@@ -570,7 +570,7 @@ dpkg.package = class "package" {
                 if file.seek then file.write(v.data)
                 else for c in string.gmatch(v.data, ".") do file.write(string.byte(c)) end end
                 file.close()
-                if self.conffiles and self.md5sums and dpkg.package.packagedb[self.name] ~= nil and v.mode == 0 then for _,w in ipairs(self.conffiles) do if w == k and self.md5sums[k] ~= dpkg.package(self.name).md5sums[k] and ((fs.exists(k) and v.data ~= readFile(k)) or not fs.exists(k)) then
+                if self.conffiles and self.md5sums and dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) ~= "not-installed" and v.mode == 0 then for _,w in ipairs(self.conffiles) do if w == k and self.md5sums[k] ~= dpkg.package(self.name).md5sums[k] and ((fs.exists(k) and v.data ~= readFile(k)) or not fs.exists(k)) then
                     local mode = fs.exists(k) and dpkg.force.confmode or (dpkg.force.confmiss and 0 or nil)
                     dpkg.print("Configuration file `" .. k .. [['
  ==> Modified (by you or by a script) since installation.
@@ -890,7 +890,34 @@ dpkg.package = class "package" {
         fs.delete(dir("info/" .. self.name .. ".list"))
         updateStatus(dpkg.package.packagedb[self.name], 3, "not-installed")
         return true
-    end
+    end,
+    verify = function()
+        if not self.isUnpacked then
+            dpkg.error("internal error: package is not unpacked")
+            return false
+        end
+        if getStatus(dpkg.package.packagedb[self.name], 1) == "hold" then
+            if dpkg.force.hold then
+                dpkg.warn("overriding problem because --force enabled:")
+                dpkg.warn("package is currently held")
+            else
+                dpkg.error("package is currently held")
+                return false
+            end
+        end
+        if not self.md5sums then
+            dpkg.error("cannot verify package: no md5 sums are available")
+            return false
+        end
+        local success = true
+        for k,v in pairs(self.md5sums) do
+            if md5.sumhexa(readFile(k)) ~= v then
+                dpkg.print("dpkg: " .. self.name .. ": checksum failed for file " .. k)
+                success = false
+            end
+        end
+        return success
+    end,
 }
 _G.package = package_old
 
@@ -1047,7 +1074,7 @@ if shell and pcall(require, "dpkg") then
     local path_exclude, path_include
     for _,v in ipairs({...}) do
         if mode ~= nil then table.insert(args, v)
-elseif string.match(v, "^%-[^-]") then
+        elseif string.match(v, "^%-[^-]") then
             local c = string.sub(v, 2, 2)
             if c == 'i' then mode = 0
             elseif c == 'r' then mode = 4
@@ -1132,6 +1159,75 @@ elseif string.match(v, "^%-[^-]") then
             elseif v == "--no-pager" then dpkg.options.pager = false
             elseif v == "--no-triggers" then dpkg.options.triggers = false
             elseif v == "--triggers" then dpkg.options.triggers = true end
+        end
+    end
+    local function exit(text)
+        dpkg.error(text)
+        print([[\nType dpkg --help for help about installing and deinstalling packages [*];
+Use 'apt' or 'aptitude' for user-friendly package management;
+Type dpkg -Dhelp for a list of dpkg debug flag values;
+Type dpkg --force-help for a list of forcing options;
+Type dpkg-deb --help for help about manipulating *.deb files;
+
+Options marked [*] produce a lot of output !]])
+        return 2
+    end
+    if mode == nil then exit("need an action option") end
+    if mode == 0 or mode == 1 then --install, --unpack (since --install == --unpack + --configure)
+        if #args == 0 then exit((mode == 0 and "--install" or "--unpack") .. " needs at least one package archive file argument") end
+        local pkgs = {}
+        for _,v in ipairs(args) do
+            if not fs.exists(v) then dpkg.error("cannot access archive '" .. v .. "': No such file or directory"); return 2 end
+            if recursive then
+                if not fs.isDir(v) then dpkg.error("cannot access directory '" .. v .. "': Not a directory"); return 2 end
+                local function getPkgs(dir)
+                    for _,w in ipairs(fs.list(dir)) do
+                        if fs.isDir(fs.combine(dir, w)) then getPkgs(fs.combine(dir, w))
+                        elseif w:match("^.*%.deb$") then
+                            local ok, pkg = pcall(dpkg.package, w)
+                            if not ok then dpkg.error("cannot access archive '" .. fs.combine(dir, w) .. "': " .. pkg); return 2 end
+                            table.insert(pkgs, pkg)
+                            os.queueEvent("nosleep")
+                            os.pullEvent()
+                        end
+                    end
+                end
+                getPkgs(v)
+            else
+                local ok, pkg = pcall(dpkg.package, v)
+                if not ok then dpkg.error("cannot access archive '" .. v .. "': " .. pkg); return 2 end
+                table.insert(pkgs, pkg)
+                os.queueEvent("nosleep")
+                os.pullEvent()
+            end
+        end
+        if #pkgs == 0 then dpkg.error("searched, but found no packages (files matching *.deb)"); return 2 end
+        local err = {}
+        for _,v in ipairs(pkgs) do
+            dpkg.print("Selecting previously unselected package " .. v.name .. ".")
+            if dpkg.package.packagedb == nil then dpkg.readDatabase() end
+            dpkg.package.packagedb[v.name] = dpkg.package.packagedb[v.name] or {Status = "unknown ok not-installed"}
+            updateStatus(dpkg.package.packagedb[v.name], 1, "install")
+            if not v.unpack() or (mode == 0 and not v.configure()) then table.insert(err, v.name) end
+            os.queueEvent("nosleep")
+            os.pullEvent()
+        end
+        if dpkg.options.triggers then for k,v in pairs(dpkg.package.packagedb) do if v["Triggers-Pending"] then
+            dpkg.print("Processing triggers for " .. k .. " (" .. v.Version .. ") ...")
+            dpkg_trigger.commit(k, dpkg.package.triggerdb, dpkg.package.packagedb)
+        end end end
+        dpkg_query.writeDatabase(dpkg.package.packagedb)
+        if #err > 0 then
+            dpkg.print("dpkg: error processing " .. table.concat(err, ", "))
+            return 2
+        else return 0 end
+    elseif mode == 2 then --configure
+        if recursive then dpkg.warn("--recursive specified, but this flag is ineffective with --configure") end
+        if #args == 0 then exit("--configure needs at least one package name argument") end
+        if args[1] == "--pending" or args[1] == "-a" then
+
+        else
+
         end
     end
 end

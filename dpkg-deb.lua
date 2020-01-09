@@ -9,8 +9,7 @@
 local ar = require "ar"
 local tar = require "tar"
 local dpkg_control = require "dpkg-control"
-local LibDeflate = dofile("apt-lua/LibDeflate.lua")
-local md5 = dofile("apt-lua/md5.lua")
+local LibDeflate = require "LibDeflate"
 
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or str end
