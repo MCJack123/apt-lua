@@ -1224,11 +1224,36 @@ Options marked [*] produce a lot of output !]])
     elseif mode == 2 then --configure
         if recursive then dpkg.warn("--recursive specified, but this flag is ineffective with --configure") end
         if #args == 0 then exit("--configure needs at least one package name argument") end
+        dpkg.readDatabase()
+        local err = {}
+        if args[1] == "--pending" or args[1] == "-a" then for k,v in pairs(dpkg.package.packagedb) do if dpkg_query.status.needs_configure(getStatus(v, 3)) then if not dpkg.package(k).configure() then table.insert(err, k) end end end
+        else for _,k in ipairs(args) do if dpkg_query.status.needs_configure(getStatus(dpkg.package.packagedb[k], 3)) then if not dpkg.package(k).configure() then table.insert(err, k) end end end end
+        dpkg_query.writeDatabase(dpkg.package.packagedb)
+        if #err > 0 then
+            dpkg.print("dpkg: error processing " .. table.concat(err, ", "))
+            return 2
+        else return 0 end
+    elseif mode == 3 then --triggers-only
+        if recursive then dpkg.warn("--recursive specified, but this flag is ineffective with --configure") end
+        if #args == 0 then exit("--triggers-only needs at least one package name argument") end
+        dpkg.readDatabase()
+        local err = {}
         if args[1] == "--pending" or args[1] == "-a" then
-
+            if dpkg.options.triggers then for k,v in pairs(dpkg.package.packagedb) do if v["Triggers-Pending"] then
+                dpkg.print("Processing triggers for " .. k .. " (" .. v.Version .. ") ...")
+                dpkg_trigger.commit(k, dpkg.package.triggerdb, dpkg.package.packagedb)
+            end end end
         else
-
+            if dpkg.options.triggers then for _,k in ipairs(args) do if dpkg.package.packagedb[k]["Triggers-Pending"] then
+                dpkg.print("Processing triggers for " .. k .. " (" .. dpkg.package.packagedb[k].Version .. ") ...")
+                dpkg_trigger.commit(k, dpkg.package.triggerdb, dpkg.package.packagedb)
+            end end end
         end
+        dpkg_query.writeDatabase(dpkg.package.packagedb)
+        if #err > 0 then
+            dpkg.print("dpkg: error processing " .. table.concat(err, ", "))
+            return 2
+        else return 0 end
     end
 end
 
