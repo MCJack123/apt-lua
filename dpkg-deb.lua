@@ -276,7 +276,7 @@ Commands:
         }, output)
     elseif mode == 1 then
         if #args < 1 then error("Usage: dpkg-deb [options...] --info <archive> [control-file-name...]") end
-        local deb = load(shell.resolve(args[1]))
+        local deb = dpkg_deb.load(shell.resolve(args[1]))
         print("new Debian package, version 2.0.")
         print("size " .. deb.data_size .. " bytes: control archive=" .. deb.control_size .. " bytes.")
         local control = {}
@@ -292,11 +292,11 @@ Commands:
         print(deb.control_archive.control.data)
     elseif mode == 2 then
         if #args < 1 then error("Usage: dpkg-deb [options...] --show <archive>") end
-        local deb = load(shell.resolve(args[1]))
+        local deb = dpkg_deb.load(shell.resolve(args[1]))
         write(({string.gsub(showformat, "%${(.-)}", deb.control)})[1])
     elseif mode == 3 then
         if #args < 1 then error("Usage: dpkg-deb [options...] --field <archive> [control-field-name...]") end
-        local deb = load(shell.resolve(args[1]))
+        local deb = dpkg_deb.load(shell.resolve(args[1]))
         local function check(v) if type(v) == "table" then return v.Short .. "\n" .. v.Long else return v end end
         for k,v in pairs(deb.control) do
             if #args > 1 then for l,w in pairs(args) do if k == w then print(k .. ": " .. check(v)); break end end
@@ -304,7 +304,7 @@ Commands:
         end
     elseif mode == 4 then
         if #args < 1 then error("Usage: dpkg-deb [options...] --contents <archive>") end
-        local deb = load(shell.resolve(args[1]), true)
+        local deb = dpkg_deb.load(shell.resolve(args[1]), true)
         local tmp = {}
         local max = {0, 0, 0, 0, 0}
         for k,v in pairs(deb.data) do
@@ -320,7 +320,7 @@ Commands:
         end
     elseif mode ~= nil and mode >= 5 and mode <= 7 then
         if #args < 1 or (not tarextract and mode ~= 6 and #args < 2) then error("Usage: dpkg-deb [options...] --extract <archive> <directory>") end
-        local deb = load(shell.resolve(args[1]), false, tarextract)
+        local deb = dpkg_deb.load(shell.resolve(args[1]), false, tarextract)
         local out = args[2] and shell.resolve(args[2]) or (mode == 6 and shell.resolve("DEBIAN") or shell.dir())
         if not tarextract then fs.makeDir(out) end
         if mode ~= 6 then if tarextract then print(deb[2]) else extract(deb.data, out) end end

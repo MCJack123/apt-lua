@@ -480,7 +480,6 @@ dpkg.package = class "package" {
         dpkg.print("Unpacking " .. self.name .. " (" .. self.control.Version .. ") ...")
         self.filelist = {}
         local replaced = {}
-        local installed_size = 0
         local function unpack_rollback()
             for _,v in ipairs(self.filelist) do if not fs.isDir(v) then
                 fs.delete(v .. ".dpkg-new")
@@ -560,7 +559,6 @@ dpkg.package = class "package" {
                         return unpack_rollback()
                     end
                 end
-                installed_size = installed_size + #v.data
                 if fs.exists(k) then fs.move(k, k .. ".dpkg-old") end
                 local file = fs.open(k .. ".dpkg-new", "wb")
                 if not file then
@@ -696,7 +694,6 @@ dpkg.package = class "package" {
         -- Update status file
         dpkg.package.packagedb[self.name] = dpkg.package.packagedb[self.name] or {}
         for k,v in pairs(self.control) do dpkg.package.packagedb[self.name][k] = v end
-        dpkg.package.packagedb[self.name]["Installed-Size"] = installed_size
         dpkg.package.packagedb[self.name].Status = "install ok unpacked"
         self.isUnpacked = true
         -- Remove conflicting packages
@@ -827,10 +824,13 @@ dpkg.package = class "package" {
         -- Delete non-config files
         local confkeys = {}
         for _,v in ipairs(self.conffiles) do confkeys[v] = true end
+        local dirs = {}
         for _,v in ipairs(self.filelist) do
             dpkg.debug("Removing " .. v)
-            if not confkeys[v] then fs.delete(v) end
+            if not confkeys[v] then if fs.isDir(v) then table.insert(dirs, v) else fs.delete(v) end end
         end
+        table.sort(dirs, function(a, b) return #a > #b end)
+        for _,v in ipairs(dirs) do if #fs.list(v) == 0 then fs.delete(v) end end
         -- Call postrm
         if not self.callMaintainerScript("postrm", "remove") then
             dpkg.error("postrm failed to run")
@@ -1311,6 +1311,34 @@ Options marked [*] produce a lot of output !]])
             dpkg.print("dpkg: error verifying " .. table.concat(err, ", "))
             return 2
         else return 0 end
+    elseif mode == 7 then --audit
+        -- checks for broken packages
+    elseif mode == 8 then --get-selections
+        dpkg.readDatabase()
+        local lines = {}
+        if #args == 0 then for k,v in pairs(dpkg.package.packagedb) do if getStatus(v, 3) ~= "not-installed" then table.insert(lines, {k, getStatus(v, 1)}) end end
+        else for _,k in ipairs(args) do table.insert(lines, {k, getStatus(dpkg.package.packagedb[k], 1)}) end end
+        textutils.tabulate(table.unpack(lines))
+    elseif mode == 9 then --set-selections
+        -- stdin?
+    elseif mode == 10 then --clear-selections
+        dpkg.readDatabase()
+        for k,v in pairs(dpkg.package.packagedb) do if v.Priority ~= "essential" and v.Priority ~= "required" then updateStatus(v, 1, "deinstall") end end
+        dpkg_query.writeDatabase(dpkg.package.packagedb)
+    elseif mode == 11 then --validate
+        if validate_type == "pkgname" then
+        elseif validate_type == "trigname" then
+        elseif validate_type == "archname" then
+        elseif validate_type == "version" then
+        else exit("unknown option --validate-" .. validate_type) end
+    elseif mode == 12 then --compare-versions
+        if #args < 3 then exit("--compare-versions takes three arguments: <version> <relation> <version>") end
+        local res = dpkg.findRelationship("a", args[1], "a (" .. args[2] .. " " .. args[3] .. ")")
+        if res == nil then return 2 elseif res == true then return 0 else return 1 end
+    elseif mode == 13 then --dpkg-deb
+        return shell.run("dpkg-deb", ...)
+    elseif mode == 14 then --dpkg-query
+        return shell.run("dpkg-query", ...)
     end
 end
 

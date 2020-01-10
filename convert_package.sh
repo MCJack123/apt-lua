@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # This file makes sure the control and data archives in a deb file are compressed with gzip ONLY.
 # Usage: convert_package.sh <file.deb>
 # Requirements: ar, gzip, bzip2, xz
@@ -46,7 +46,7 @@ else
 fi
 
 rm "$FILE"
-ar r "$FILE" debian-binary control.tar.gz data.tar.gz > /dev/null
+ar r "$FILE" debian-binary control.tar.gz data.tar.gz > /dev/null 2>/dev/null
 popd > /dev/null
 rm -r "$TEMP"
 echo "$FILE: OK"

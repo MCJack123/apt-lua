@@ -90,7 +90,7 @@ function dpkg_query.writeDatabase(data)
     for k,v in pairs(data) do if not (string.match(v.Status, "(%S+) %S+ %S+") == "unknown" and string.match(v.Status, "%S+ %S+ (%S+)") == "not-installed") then
         file.writeLine("Package: " .. k)
         for l,w in pairs(v) do if l ~= "Package" and l ~= "Description" then file.writeLine(l .. ": " .. check(w)) end end
-        file.writeLine("Description: " .. check(v.Description))
+        if v.Description then file.writeLine("Description: " .. check(v.Description)) end
         file.writeLine("")
     end end
     file.close()
