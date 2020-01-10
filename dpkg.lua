@@ -216,9 +216,9 @@ dpkg.package = class "package" {
         if self.control.Architecture ~= "craftos" and self.control.Architecture ~= "all" then
             if dpkg.force.architecture then
                 dpkg.warn("overriding problem because --force enabled:")
-                dpkg.warn("package is not built for the host architecture")
+                dpkg.warn("package architecture (" .. self.control.Architecture .. ") does not match the system (craftos)")
             else
-                dpkg.error("package is not built for the host architecture")
+                dpkg.error("package architecture (" .. self.control.Architecture .. ") does not match the system (craftos)")
                 return false
             end
         end
@@ -1287,7 +1287,7 @@ Options marked [*] produce a lot of output !]])
         local err = {}
         for _,k in ipairs(args) do
             local ok, pkg = pcall(dpkg.package, k)
-            if ok then updateStatus(dpkg.package.packagedb[k], 1, "deinstall") end
+            if ok then updateStatus(dpkg.package.packagedb[k], 1, "purge") end
             if not ok or not pkg.remove(true) then table.insert(err, k) end
         end
         dpkg_query.writeDatabase(dpkg.package.packagedb)
@@ -1312,7 +1312,47 @@ Options marked [*] produce a lot of output !]])
             return 2
         else return 0 end
     elseif mode == 7 then --audit
-        -- checks for broken packages
+        dpkg.readDatabase()
+        if #args == 0 then
+            for k,v in pairs(dpkg.package.packagedb) do
+                if not fs.exists(dir("info/" .. k .. ".list")) then dpkg.warn("package " .. k .. " is missing a file list\nTo fix this issue: reinstall the package") end
+                if not fs.exists(dir("info/" .. k .. ".md5sums")) then dpkg.warn("package " .. k .. " is missing an md5sum list\nTo fix this issue: reinstall the package") end
+                if getStatus(v, 1) == "install" then
+                    if getStatus(v, 3) == "half-installed" or getStatus(v, 2) == "reinstreq" then dpkg.warn("package " .. k .. " is not installed properly\nTo fix this issue: reinstall the package")
+                    elseif getStatus(v, 3) == "not-installed" or getStatus(v, 3) == "config-files" then dpkg.warn("package " .. k .. " is marked for installation, but it is not installed\nTo fix this issue: install the package")
+                    elseif getStatus(v, 3) ~= "installed" then dpkg.warn("package " .. k .. " is not configured\nTo fix this issue: configure the package") end
+                elseif getStatus(v, 1) == "deinstall" then
+                    if getStatus(v, 3) == "not-installed" then dpkg.warn("package " .. k .. " is marked for removal of non-config files, but config files are not installed\nTo fix this issue: reinstall package then remove properly")
+                    elseif getStatus(v, 3) == "installed" or getStatus(v, 3) == "triggers-pending" or getStatus(v, 3) == "triggers-awaited" then dpkg.warn("package " .. k .. " is marked for removal, but the package hasn't been removed\nTo fix this issue: remove the package")
+                    elseif getStatus(v, 3) ~= "config-files" then dpkg.warn("package " .. k .. " was not removed properly\nTo fix this issue: remove the package") end
+                elseif getStatus(v, 1) == "purge" then
+                    if getStatus(v, 3) == "config-files" then dpkg.warn("package " .. k .. " is marked for purge, but config files are still installed\nTo fix this issue: purge the package")
+                    elseif getStatus(v, 3) == "installed" or getStatus(v, 3) == "triggers-pending" or getStatus(v, 3) == "triggers-awaited" then dpkg.warn("package " .. k .. " is marked for purge, but the package hasn't been removed\nTo fix this issue: remove the package")
+                    elseif getStatus(v, 3) ~= "config-files" then dpkg.warn("package " .. k .. " was not purged properly\nTo fix this issue: remove the package") end
+                elseif getStatus(v, 1) == "unknown" then dpkg.warn("package " .. k .. " is in an unknown status\nTo fix this issue: (re)install the package") end
+            end
+        else
+            for _,k in ipairs(args) do
+                local v = dpkg.package.packagedb[k]
+                if not v then dpkg.warn("package " .. k .. " not found") else
+                    if not fs.exists(dir("info/" .. k .. ".list")) then dpkg.warn("package " .. k .. " is missing a file list\nTo fix this issue: reinstall the package") end
+                    if not fs.exists(dir("info/" .. k .. ".md5sums")) then dpkg.warn("package " .. k .. " is missing an md5sum list\nTo fix this issue: reinstall the package") end
+                    if getStatus(v, 1) == "install" then
+                        if getStatus(v, 3) == "half-installed" or getStatus(v, 2) == "reinstreq" then dpkg.warn("package " .. k .. " is not installed properly\nTo fix this issue: reinstall the package")
+                        elseif getStatus(v, 3) == "not-installed" or getStatus(v, 3) == "config-files" then dpkg.warn("package " .. k .. " is marked for installation, but it is not installed\nTo fix this issue: install the package")
+                        elseif getStatus(v, 3) ~= "installed" then dpkg.warn("package " .. k .. " is not configured\nTo fix this issue: configure the package") end
+                    elseif getStatus(v, 1) == "deinstall" then
+                        if getStatus(v, 3) == "not-installed" then dpkg.warn("package " .. k .. " is marked for removal of non-config files, but config files are not installed\nTo fix this issue: reinstall package then remove properly")
+                        elseif getStatus(v, 3) == "installed" or getStatus(v, 3) == "triggers-pending" or getStatus(v, 3) == "triggers-awaited" then dpkg.warn("package " .. k .. " is marked for removal, but the package hasn't been removed\nTo fix this issue: remove the package")
+                        elseif getStatus(v, 3) ~= "config-files" then dpkg.warn("package " .. k .. " was not removed properly\nTo fix this issue: remove the package") end
+                    elseif getStatus(v, 1) == "purge" then
+                        if getStatus(v, 3) == "config-files" then dpkg.warn("package " .. k .. " is marked for purge, but config files are still installed\nTo fix this issue: purge the package")
+                        elseif getStatus(v, 3) == "installed" or getStatus(v, 3) == "triggers-pending" or getStatus(v, 3) == "triggers-awaited" then dpkg.warn("package " .. k .. " is marked for purge, but the package hasn't been removed\nTo fix this issue: remove the package")
+                        elseif getStatus(v, 3) ~= "config-files" then dpkg.warn("package " .. k .. " was not purged properly\nTo fix this issue: remove the package") end
+                    elseif getStatus(v, 1) == "unknown" then dpkg.warn("package " .. k .. " is in an unknown status\nTo fix this issue: (re)install the package") end
+                end
+            end
+        end
     elseif mode == 8 then --get-selections
         dpkg.readDatabase()
         local lines = {}
@@ -1325,11 +1365,15 @@ Options marked [*] produce a lot of output !]])
         dpkg.readDatabase()
         for k,v in pairs(dpkg.package.packagedb) do if v.Priority ~= "essential" and v.Priority ~= "required" then updateStatus(v, 1, "deinstall") end end
         dpkg_query.writeDatabase(dpkg.package.packagedb)
+        return 0
     elseif mode == 11 then --validate
-        if validate_type == "pkgname" then
-        elseif validate_type == "trigname" then
-        elseif validate_type == "archname" then
-        elseif validate_type == "version" then
+        if validate_type == "pkgname" then return string.match(args[1], "^%w[%w+-.]+$") and 0 or 2
+        elseif validate_type == "trigname" then return string.match(args[1], "^%w[%w+-.]+$") and 0 or 2
+        elseif validate_type == "archname" then return (args[1] == "all" or args[1] == "any" or args[1] == "craftos" or args[1] == "source") and 0 or 
+            ((args[1] == "i386" or args[1] == "amd64" or args[1] == "powerpc" or args[1] == "armv7h" or 
+              args[1] == "aarch64" or args[1] == "ppc64el" or args[1] == "ia64" or args[1] == "s390x" or 
+              args[1] == "mips" or args[1] == "mipsel" or args[1] == "mips64el" or args[1] == "armv7el") and 1 or 2)
+        elseif validate_type == "version" then return dpkg.compareVersions(args[1], "1") and 0 or 2
         else exit("unknown option --validate-" .. validate_type) end
     elseif mode == 12 then --compare-versions
         if #args < 3 then exit("--compare-versions takes three arguments: <version> <relation> <version>") end

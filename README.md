@@ -13,6 +13,7 @@ A full port of Debian APT & dpkg to ComputerCraft Lua. WIP.
 * Multi-architecture (due to `craftos` arch requirement)
 * Support for non-gz packages
 * Changing install directories
+* `--set-selections` switch in `dpkg.lua`
 
 ### How to create a package that works with dpkg-lua
 The process is mostly the same as making any normal Debian package, but the architecture has to be `craftos` or `all` and the package has to be recompressed to only use gzip.
