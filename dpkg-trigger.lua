@@ -48,6 +48,7 @@ function dpkg_trigger.lock()
     return function()
         file.close()
         fs.delete(dir("triggers/Lock"))
+        if fs.exists(dir("triggers/Lock")) then error("Lock still exists!") end
     end
 end
 
@@ -56,11 +57,11 @@ function dpkg_trigger.readDatabase()
     if not file then error("Missing trigger file") end
     local unlock = dpkg_trigger.lock()
     local retval = {}
-    for l in file:lines() do
+    for l in file:lines() do if l ~= "" then
         local path, package = string.match(l, "([^ ]+) ([^ ]+)")
         retval[path] = {package = package, await = true}
         if string.find(package, "/noawait") then retval[path].await = false end
-    end
+    end end
     file:close()
     unlock()
     return retval

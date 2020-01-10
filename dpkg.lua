@@ -92,7 +92,7 @@ local script_unwind = {
     postrm = "preinst"
 }
 
-local self = {} -- to silence IDE warnings
+self = {} -- to silence IDE warnings
 
 dpkg.options = {
     triggers = true,
@@ -742,7 +742,7 @@ dpkg.package = class "package" {
         -- Check if any packages break this one
         local breaks_errors = {}
         for k,v in pairs(dpkg.package.packagedb) do
-            if v.Breaks and dpkg_query.status.get_number(getStatus(v.Status, 3)) >= dpkg_query.status.unpacked and dpkg.findRelationship(self.name, self.control.Version, v.Breaks) then
+            if v.Breaks and dpkg_query.status.get_number(getStatus(v, 3)) >= dpkg_query.status.unpacked and dpkg.findRelationship(self.name, self.control.Version, v.Breaks) then
                 table.insert(breaks_errors, k)
             end
         end
@@ -783,7 +783,7 @@ dpkg.package = class "package" {
         if dpkg.package.packagedb[self.name]["Triggers-Pending"] and dpkg.options.triggers then
             dpkg.print("Processing triggers for " .. self.name .. " (" .. self.control.Version .. ") ...")
             dpkg_trigger.commit(self.name, dpkg.package.triggerdb, dpkg.package.packagedb)
-        end
+        else updateStatus(dpkg.package.packagedb[self.name], 3, "installed") end
         dpkg.package.clearScriptErrors()
         return true
     end,
@@ -1163,7 +1163,9 @@ if shell and pcall(require, "dpkg") then
     end
     local function exit(text)
         dpkg.error(text)
-        print([[\nType dpkg --help for help about installing and deinstalling packages [*];
+        print([[
+
+Type dpkg --help for help about installing and deinstalling packages [*];
 Use 'apt' or 'aptitude' for user-friendly package management;
 Type dpkg -Dhelp for a list of dpkg debug flag values;
 Type dpkg --force-help for a list of forcing options;
@@ -1177,6 +1179,7 @@ Options marked [*] produce a lot of output !]])
         if #args == 0 then exit((mode == 0 and "--install" or "--unpack") .. " needs at least one package archive file argument") end
         local pkgs = {}
         for _,v in ipairs(args) do
+            v = shell and shell.resolve(v) or v
             if not fs.exists(v) then dpkg.error("cannot access archive '" .. v .. "': No such file or directory"); return 2 end
             if recursive then
                 if not fs.isDir(v) then dpkg.error("cannot access directory '" .. v .. "': Not a directory"); return 2 end
@@ -1184,6 +1187,7 @@ Options marked [*] produce a lot of output !]])
                     for _,w in ipairs(fs.list(dir)) do
                         if fs.isDir(fs.combine(dir, w)) then getPkgs(fs.combine(dir, w))
                         elseif w:match("^.*%.deb$") then
+                            dpkg.print("Loading " .. v .. " (this may take a while) ...")
                             local ok, pkg = pcall(dpkg.package, w)
                             if not ok then dpkg.error("cannot access archive '" .. fs.combine(dir, w) .. "': " .. pkg); return 2 end
                             table.insert(pkgs, pkg)
@@ -1194,6 +1198,7 @@ Options marked [*] produce a lot of output !]])
                 end
                 getPkgs(v)
             else
+                dpkg.print("Loading " .. v .. " (this may take a while) ...")
                 local ok, pkg = pcall(dpkg.package, v)
                 if not ok then dpkg.error("cannot access archive '" .. v .. "': " .. pkg); return 2 end
                 table.insert(pkgs, pkg)
@@ -1226,15 +1231,21 @@ Options marked [*] produce a lot of output !]])
         if #args == 0 then exit("--configure needs at least one package name argument") end
         dpkg.readDatabase()
         local err = {}
-        if args[1] == "--pending" or args[1] == "-a" then for k,v in pairs(dpkg.package.packagedb) do if dpkg_query.status.needs_configure(getStatus(v, 3)) then if not dpkg.package(k).configure() then table.insert(err, k) end end end
-        else for _,k in ipairs(args) do if dpkg_query.status.needs_configure(getStatus(dpkg.package.packagedb[k], 3)) then if not dpkg.package(k).configure() then table.insert(err, k) end end end end
+        if args[1] == "--pending" or args[1] == "-a" then for k,v in pairs(dpkg.package.packagedb) do if dpkg_query.status.needs_configure(getStatus(v, 3)) then 
+            local ok, pkg = pcall(dpkg.package, k)
+            if not ok or not pkg.configure() then table.insert(err, k) end 
+        end end
+        else for _,k in ipairs(args) do if dpkg_query.status.needs_configure(getStatus(dpkg.package.packagedb[k], 3)) then 
+            local ok, pkg = pcall(dpkg.package, k)
+            if not ok or not pkg.configure() then table.insert(err, k) end 
+        end end end
         dpkg_query.writeDatabase(dpkg.package.packagedb)
         if #err > 0 then
             dpkg.print("dpkg: error processing " .. table.concat(err, ", "))
             return 2
         else return 0 end
     elseif mode == 3 then --triggers-only
-        if recursive then dpkg.warn("--recursive specified, but this flag is ineffective with --configure") end
+        if recursive then dpkg.warn("--recursive specified, but this flag is ineffective with --triggers-only") end
         if #args == 0 then exit("--triggers-only needs at least one package name argument") end
         dpkg.readDatabase()
         local err = {}
@@ -1252,6 +1263,52 @@ Options marked [*] produce a lot of output !]])
         dpkg_query.writeDatabase(dpkg.package.packagedb)
         if #err > 0 then
             dpkg.print("dpkg: error processing " .. table.concat(err, ", "))
+            return 2
+        else return 0 end
+    elseif mode == 4 then --remove
+        if recursive then dpkg.warn("--recursive specified, but this flag is ineffective with --remove") end
+        if #args == 0 then exit("--remove needs at least one package name argument") end
+        dpkg.readDatabase()
+        local err = {}
+        for _,k in ipairs(args) do
+            local ok, pkg = pcall(dpkg.package, k)
+            if ok then updateStatus(dpkg.package.packagedb[k], 1, "deinstall") end
+            if not ok or not pkg.remove(false) then table.insert(err, k) end
+        end
+        dpkg_query.writeDatabase(dpkg.package.packagedb)
+        if #err > 0 then
+            dpkg.print("dpkg: error processing " .. table.concat(err, ", "))
+            return 2
+        else return 0 end
+    elseif mode == 5 then --purge
+        if recursive then dpkg.warn("--recursive specified, but this flag is ineffective with --purge") end
+        if #args == 0 then exit("--purge needs at least one package name argument") end
+        dpkg.readDatabase()
+        local err = {}
+        for _,k in ipairs(args) do
+            local ok, pkg = pcall(dpkg.package, k)
+            if ok then updateStatus(dpkg.package.packagedb[k], 1, "deinstall") end
+            if not ok or not pkg.remove(true) then table.insert(err, k) end
+        end
+        dpkg_query.writeDatabase(dpkg.package.packagedb)
+        if #err > 0 then
+            dpkg.print("dpkg: error processing " .. table.concat(err, ", "))
+            return 2
+        else return 0 end
+    elseif mode == 6 then --verify
+        if recursive then dpkg.warn("--recursive specified, but this flag is ineffective with --verify") end
+        dpkg.readDatabase()
+        local err = {}
+        if #args == 0 then for k in pairs(dpkg.package.packagedb) do
+            local ok, pkg = pcall(dpkg.package, k)
+            if not ok or not pkg.verify() then table.insert(err, k) end
+        end else for _,k in ipairs(args) do
+            local ok, pkg = pcall(dpkg.package, k)
+            if not ok or not pkg.verify() then table.insert(err, k) end
+        end end
+        dpkg_query.writeDatabase(dpkg.package.packagedb)
+        if #err > 0 then
+            dpkg.print("dpkg: error verifying " .. table.concat(err, ", "))
             return 2
         else return 0 end
     end

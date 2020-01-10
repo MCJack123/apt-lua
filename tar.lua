@@ -60,7 +60,11 @@ function tar.load(path, noser, rawdata)
     if rawdata then
         local s = 1
         file = {
-            read = function()
+            read = function(num)
+                if num then
+                    s=s+num
+                    return string.sub(path, s-num, s-1)
+                end
                 s=s+1
                 return string.byte(string.sub(path, s-1, s-1))
             end,
@@ -74,11 +78,20 @@ function tar.load(path, noser, rawdata)
         c = c or 1
         if c < 1 then return end
         local retval = nil
-        for i = 1, c do
-            local n = oldread()
-            if n == nil then return retval end
-            retval = (retval or "") .. string.char(n)
-            sum = sum + n
+        if http.websocket then
+            retval = oldread(c)
+            for ch in retval:gmatch(".") do sum = sum + ch:byte() end
+        else
+            for i = 1, c do
+                local n = oldread()
+                if n == nil then return retval end
+                retval = (retval or "") .. string.char(n)
+                sum = sum + n
+                if i % 1000000 == 0 then
+                    os.queueEvent("nosleep")
+                    os.pullEvent()
+                end
+            end
         end
         seek = seek + c
         return retval
@@ -122,7 +135,7 @@ function tar.load(path, noser, rawdata)
             if sum ~= checksum then print("Warning: checksum mismatch for " .. data.name) end
             if size ~= nil and size > 0 then
                 data.data = file.read(size)
-                file.read(512 - (seek % 512))
+                if size % 512 ~= 0 then file.read(512 - (seek % 512)) end
             end
             assert(seek % 512 == 0)
             table.insert(retval, data)
