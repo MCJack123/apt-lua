@@ -1,5 +1,4 @@
-if kernel then os.loadAPI("LibDeflate") else _G.LibDeflate = dofile("/apt-lua/LibDeflate.lua") end
-if LibDeflate == nil then error("This requires LibDeflate (in /usr/lib).") end
+local LibDeflate = require "LibDeflate"
 local args = {...}
 
 local mode = 0

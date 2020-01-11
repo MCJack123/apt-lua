@@ -1,5 +1,5 @@
 -- Unix ar archive library & program
--- Use in the shell or with os.loadAPI
+-- Use in the shell or with require
 
 local function trim(s) return string.match(s, '^()%s*$') and '' or string.match(s, '^%s*(.*%S)') end
 local function u2cc(p) return bit.band(p, 0x1) * 8 + bit.band(p, 0x2) + bit.band(p, 0x4) / 4 + 4 end

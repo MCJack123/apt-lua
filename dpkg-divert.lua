@@ -5,7 +5,7 @@
 -- a different location.
 -- This file can be run from the shell.
 --
--- Copyright (c) 2019 JackMacWindows.
+-- Copyright (c) 2019-2020 JackMacWindows.
 
 local dpkg_divert = {}
 

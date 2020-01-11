@@ -1,5 +1,5 @@
 -- Tape Archive (tar) archiver/unarchiver library (using UStar)
--- Use in the shell or with os.loadAPI
+-- Use in the shell or with require
 
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function u2cc(p) return bit.band(p, 0x1) * 8 + bit.band(p, 0x2) + bit.band(p, 0x4) / 4 + 4 end
@@ -425,7 +425,7 @@ if pcall(require, "tar") then
         else table.insert(files, v) end
     end
     if compress and LibDeflate == nil then 
-        if kernel then os.loadAPI("LibDeflate") elseif shell.resolveProgram("LibDeflate.lua") ~= nil then _G.LibDeflate = dofile(shell.resolveProgram("LibDeflate.lua")) end
+        LibDeflate = require "LibDeflate"
         if LibDeflate == nil then error("Compression is only supported when LibDeflate.lua is available in the PATH.") end
     end
     local olddir = shell.dir()

@@ -5,7 +5,7 @@
 -- package than the one that's being installed.
 -- This file can be run from the shell.
 --
--- Copyright (c) 2019 JackMacWindows.
+-- Copyright (c) 2019-2020 JackMacWindows.
 
 local dpkg_query = require "dpkg-query"
 

@@ -3,7 +3,7 @@
 --
 -- This file provides functions to parse control files.
 --
--- Copyright (c) 2019 JackMacWindows.
+-- Copyright (c) 2019-2020 JackMacWindows.
 
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 

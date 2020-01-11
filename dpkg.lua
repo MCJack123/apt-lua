@@ -6,7 +6,7 @@
 -- automate installation.
 -- This file can be run from the shell.
 --
--- Copyright (c) 2019 JackMacWindows.
+-- Copyright (c) 2019-2020 JackMacWindows.
 
 local class = require "class"
 local diff = require "diff"
@@ -47,8 +47,8 @@ dpkg.error = function(text)
     term.blit("dpkg: error: ", "000000eeeee00", "fffffffffffff")
     print(text)
 end
---dpkg.debug = function(text) end
-local debugger = peripheral.find("debugger"); dpkg.debug = function(text) if debugger then debugger.print(text) else print("DEBUG: " .. text) end end
+dpkg.debug = function(text) end
+--local debugger = peripheral.find("debugger"); dpkg.debug = function(text) if debugger then debugger.print(text) else print("DEBUG: " .. text) end end
 
 local function dir(p) return fs.combine(dpkg.admindir, p) end
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
@@ -852,12 +852,17 @@ dpkg.package = class "package" {
         local confkeys = {}
         for _,v in ipairs(self.conffiles) do confkeys[v] = true end
         local dirs = {}
-        for _,v in ipairs(self.filelist) do if v ~= "/" then
+        local remove = {}
+        for i,v in ipairs(self.filelist) do if v ~= "/" then
             dpkg.debug("Removing " .. v)
-            if not confkeys[v] then if fs.isDir(v) then table.insert(dirs, v) else fs.delete(v) end end
+            if not confkeys[v] then
+                table.insert(remove, i)
+                if fs.isDir(v) then table.insert(dirs, v) else fs.delete(v) end 
+            end
         end end
         table.sort(dirs, function(a, b) return #a > #b end)
         for _,v in ipairs(dirs) do if #fs.list(v) == 0 then fs.delete(v) end end
+        for _,v in ipairs(remove) do self.filelist[v] = nil end
         -- Call postrm
         if not self.callMaintainerScript("postrm", "remove") then
             dpkg.error("postrm failed to run")
@@ -880,10 +885,10 @@ dpkg.package = class "package" {
         -- Remove maintainer scripts
         for _,v in ipairs(fs.find(dir("info/" .. self.name .. ".*"))) do 
             local ext = v:match("[^.]+$")
-            if not (ext == "postrm" or ext == "conffiles" or ext == "list") then fs.delete(v) end
+            if not (ext == "postrm" or ext == "conffiles" or ext == "list" or ext == "md5sums") then fs.delete(v) end
         end
-        -- Update file list
-
+        -- Update file list & status
+        writeLines(dir("info/" .. self.name .. ".list"), self.filelist)
         updateStatus(dpkg.package.packagedb[self.name], 3, "config-files")
         if not fs.exists(dir("info/" .. self.name .. ".postrm")) and not fs.exists(dir("info/" .. self.name .. ".conffiles")) then
             -- Treat this package as purged since it's pretty much the same
@@ -1097,6 +1102,87 @@ end
     * 14 = dpkg-query
 ]]
 
+local helpstr = [[Usage: dpkg [<option> ...] <command>
+
+Commands:
+    -i|--install       <.deb file name> ... | -R|--recursive <directory> ...
+    --unpack           <.deb file name> ... | -R|--recursive <directory> ...
+    -A|--record-avail  <.deb file name> ... | -R|--recursive <directory> ...
+    --configure        <package> ... | -a|--pending
+    --triggers-only    <package> ... | -a|--pending
+    -r|--remove        <package> ... | -a|--pending
+    -P|--purge         <package> ... | -a|--pending
+    -V|--verify <package> ...        Verify the integrity of package(s).
+    --get-selections [<pattern> ...] Get list of selections to stdout.
+    --set-selections                 Set package selections from stdin.
+    --clear-selections               Deselect every non-essential package.
+    --update-avail [<Packages-file>] Replace available packages info.
+    --merge-avail [<Packages-file>]  Merge with info from file.
+    --clear-avail                    Erase existing available info.
+    --forget-old-unavail             Forget uninstalled unavailable pkgs.
+    -s|--status <package> ...        Display package status details.
+    -p|--print-avail <package> ...   Display available version details.
+    -L|--listfiles <package> ...     List files 'owned' by package(s).
+    -l|--list [<pattern> ...]        List packages concisely.
+    -S|--search <pattern> ...        Find package(s) owning file(s).
+    -C|--audit [<package> ...]       Check for broken package(s).
+    --yet-to-unpack                  Print packages selected for installation.
+    --predep-package                 Print pre-dependencies to unpack.
+    --add-architecture <arch>        Add <arch> to the list of architectures.
+    --remove-architecture <arch>     Remove <arch> from the list of architectures.
+    --print-architecture             Print dpkg architecture.
+    --print-foreign-architectures    Print allowed foreign architectures.
+    --assert-<feature>               Assert support for the specified feature.
+    --validate-<thing> <string>      Validate a <thing>'s <string>.
+    --compare-versions <a> <op> <b>  Compare version numbers - see below.
+    --force-help                     Show help on forcing.
+    -Dh|--debug=help                 Show help on debugging.
+
+    -?, --help                       Show this help message.
+        --version                    Show the version.
+
+Assertable features: support-predepends, working-epoch, long-filenames,
+    multi-conrep, multi-arch, versioned-provides.
+
+Validatable things: pkgname, archname, trigname, version.
+
+Use dpkg with -b, --build, -c, --contents, -e, --control, -I, --info,
+    -f, --field, -x, --extract, -X, --vextract, --ctrl-tarfile, --fsys-tarfile
+on archives (type dpkg-deb --help).
+
+Options:
+    --admindir=<directory>     Use <directory> instead of /var/lib/dpkg.
+    --root=<directory>         Install on a different root directory.
+    --instdir=<directory>      Change installation dir without changing admin dir.
+    --path-exclude=<pattern>   Do not install paths which match a shell pattern.
+    --path-include=<pattern>   Re-include a pattern after a previous exclusion.
+    -O|--selected-only         Skip packages not selected for install/upgrade.
+    -E|--skip-same-version     Skip packages whose same version is installed.
+    -G|--refuse-downgrade      Skip packages with earlier version than installed.
+    -B|--auto-deconfigure      Install even if it would break some other package.
+    --[no-]triggers            Skip or force consequential trigger processing.
+    --verify-format=<format>   Verify output format (supported: 'rpm').
+    --no-debsig                Do not try to verify package signatures.
+    --no-act|--dry-run|--simulate
+                               Just say what we would do - don't do it.
+    -D|--debug=<octal>         Enable debugging (see -Dhelp or --debug=help).
+    --status-fd <n>            Send status change updates to file descriptor <n>.
+    --status-logger=<command>  Send status change updates to <command>'s stdin.
+    --log=<filename>           Log status changes and actions to <filename>.
+    --ignore-depends=<package>,...
+                               Ignore dependencies involving <package>.
+    --force-...                Override problems (see --force-help).
+    --no-force-...|--refuse-...
+                               Stop when problems encountered.
+    --abort-after <n>          Abort after encountering <n> errors.
+
+Comparison operators for --compare-versions are:
+    lt le eq ne ge gt       (treat empty version as earlier than any version);
+    lt-nl le-nl ge-nl gt-nl (treat empty version as later than any version);
+    < << <= = >= >> >       (only for compatibility with control file syntax).
+
+Use 'apt' or 'aptitude' for user-friendly package management.]]
+
 if shell and pcall(require, "dpkg") then
     local args = {}
     local mode = nil
@@ -1114,7 +1200,7 @@ if shell and pcall(require, "dpkg") then
             elseif c == 'P' then mode = 5
             elseif c == 'V' then mode = 6
             elseif c == 'C' then mode = 7
-            elseif c == '?' then print([[Temporary help string]]); return
+            elseif c == '?' then if dpkg.options.pager then require("pager")(helpstr) else print(helpstr) end return
             elseif c == 'D' then -- TODO: add debug arguments
             elseif c == 'b' or c == 'c' or c == 'e' or c == 'x' or c == 'X' or c == 'f' or c == 'I' then mode = 13
             elseif c == 'l' or c == 's' or c == 'L' or c == 'S' or c == 'p' then mode = 14
@@ -1149,8 +1235,38 @@ if shell and pcall(require, "dpkg") then
                 else return 2 end
             elseif string.match(v, "^%-%-validate%-") then mode = 11; validate_type = string.match("^%-%-validate%-(.+)")
             elseif v == "--compare-verisons" then mode = 12
-            elseif v == "--help" then print([[Temporary help string]]); return
-            elseif v == "--force-help" then print([[Temporary force help string]]); return
+            elseif v == "--help" then if dpkg.options.pager then require("pager")(helpstr) else print(helpstr) end return
+            elseif v == "--force-help" then (dpkg.options.pager and require("pager") or print)([[dpkg forcing options - control behaviour when problems found:
+  warn but continue:  --force-<thing>,<thing>,...
+  stop with error:    --refuse-<thing>,<thing>,... | --no-force-<thing>,...
+ Forcing things:
+  [!] all                Set all force options
+  [*] downgrade          Replace a package with a lower version
+      configure-any      Configure any package which may help this one
+      hold               Process incidental packages even when on hold
+      bad-verify         Install a package even if it fails authenticity check
+      bad-version        Process even packages with wrong versions
+      overwrite          Overwrite a file from one package with another
+      overwrite-diverted Overwrite a diverted file with an undiverted version
+  [!] overwrite-dir      Overwrite one package's directory with another's file
+  [!] confnew            Always use the new config files, don't prompt
+  [!] confold            Always use the old config files, don't prompt
+  [!] confdef            Use the default option for new config files if one
+                         is available, don't prompt. If no default can be found,
+                         you will be prompted unless one of the confold or
+                         confnew options is also given
+  [!] confmiss           Always install missing config files
+  [!] confask            Offer to replace config files with no new versions
+  [!] architecture       Process even packages with wrong or no architecture
+  [!] breaks             Install even if it would break another package
+  [!] conflicts          Allow installation of conflicting packages
+  [!] depends            Turn all dependency problems into warnings
+  [!] depends-version    Turn dependency version problems into warnings
+  [!] remove-reinstreq   Remove packages which require installation
+  [!] remove-essential   Remove an essential package
+
+WARNING - use of options marked [!] can seriously damage your installation.
+Forcing options marked [*] are enabled by default.]]) return
             elseif v == "--build" or v == "--contents" or v == "--control" or v == "--extract" or v == "--vextract" or v == "--field" or v == "--ctrl-tarfile" or v == "--fsys-tarfile" or v == "--info" then mode = 13
             elseif v == "--list" or v == "--status" or v == "--listfiles" or v == "--search" or v == "--print-avail" then mode = 14
             elseif v == "--auto-deconfigure" then dpkg.options.auto_deconfigure = true
@@ -1208,6 +1324,13 @@ Options marked [*] produce a lot of output !]])
         return 2
     end
     if mode == nil then exit("need an action option") end
+    if not fs.exists(dir("")) then
+        fs.makeDir(dir("info"))
+        fs.makeDir(dir("triggers"))
+        writeFile(dir("status"), "")
+        writeFile(dir("triggers/Unincorp"), "")
+        writeFile(dir("triggers/File"), "")
+    end
     if mode == 0 or mode == 1 then --install, --unpack (since --install == --unpack + --configure)
         if #args == 0 then exit((mode == 0 and "--install" or "--unpack") .. " needs at least one package archive file argument") end
         local pkgs = {}

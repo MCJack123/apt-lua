@@ -4,7 +4,7 @@
 -- This file provides functions to interact with deb packages.
 -- This file can be run from the shell.
 --
--- Copyright (c) 2019 JackMacWindows.
+-- Copyright (c) 2019-2020 JackMacWindows.
 
 local ar = require "ar"
 local tar = require "tar"

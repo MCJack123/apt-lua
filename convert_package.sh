@@ -3,6 +3,12 @@
 # Usage: convert_package.sh <file.deb>
 # Requirements: ar, gzip, bzip2, xz
 set -e
+
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <package.deb>"
+    exit 2
+fi
+
 FILE="$(cd $(dirname "$1"); pwd)/$(basename "$1")"
 pushd "$PWD" > /dev/null
 TEMP="$(mktemp -d 2>/dev/null || mktemp -d -t 'tmp')"

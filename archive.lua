@@ -1,5 +1,5 @@
--- Archive library
-if kernel then os.loadAPI("LibDeflate") else _G.LibDeflate = dofile("LibDeflate.lua") end
+-- Archive library for CC
+local LibDeflate = require "LibDeflate"
 
 compression_level = nil -- compression level (nil for default)
 
