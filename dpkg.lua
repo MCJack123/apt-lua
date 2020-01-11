@@ -245,7 +245,7 @@ dpkg.package = class "package" {
                 local ok, name = dpkg.checkDependency(v, function(state, package)
                     return dpkg_query.status.configured(state) or (package["Config-Version"] ~= nil and dpkg_query.status.present(state))
                 end)
-                if not ok then table.insert(predepend_errors, {name, trim(v)}) end
+                if not ok and not dpkg.options.ignore_depends[name] then table.insert(predepend_errors, {name, trim(v)}) end
             end
         end
         if #predepend_errors > 0 then
@@ -715,6 +715,10 @@ dpkg.package = class "package" {
                 return false
             end
         end
+        if not dpkg_query.status.needs_configure(getStatus(dpkg.package.packagedb[self.name], 3)) then
+            dpkg.error("package is already configured")
+            return false
+        end
         -- Check dependencies
         local depend_errors = {}
         if self.control.Depends ~= nil then
@@ -722,7 +726,7 @@ dpkg.package = class "package" {
                 local ok, name = dpkg.checkDependency(v, function(state, package)
                     return dpkg_query.status.configured(state) or (package["Config-Version"] ~= nil and dpkg_query.status.present(state))
                 end)
-                if not ok then table.insert(depend_errors, {name, trim(v)}) end
+                if not ok and not dpkg.options.ignore_depends[name] then table.insert(depend_errors, {name, trim(v)}) end
             end
         end
         if #depend_errors > 0 then
@@ -798,6 +802,29 @@ dpkg.package = class "package" {
                 return false
             end
         end
+        if not dpkg_query.status.present(getStatus(dpkg.package.packagedb[self.name], 3)) then
+            if purge then return self.purge() end
+            dpkg.error("cannot remove package: package is not installed")
+            return false
+        end
+        if getStatus(dpkg.package.packagedb[self.name], 2) == "reinstreq" then
+            if dpkg.force.remove_reinstreq then
+                dpkg.warn("overriding problem because --force enabled:")
+                dpkg.warn("package requires reinstallation")
+            else
+                dpkg.error("package requires reinstallation")
+                return false
+            end
+        end
+        if dpkg.package.packagedb[self.name].Essential == "yes" then
+            if dpkg.force.remove_essential then
+                dpkg.warn("overriding problem because --force enabled:")
+                dpkg.warn("package is marked as essential")
+            else
+                dpkg.error("package is marked as essential")
+                return false
+            end
+        end
         do
             local errors = {}
             for k,v in pairs(dpkg.package.packagedb) do if (v.Depends and dpkg.findRelationship(self.name, self.control.Version, v.Depends)) then table.insert(errors, k) end end
@@ -825,10 +852,10 @@ dpkg.package = class "package" {
         local confkeys = {}
         for _,v in ipairs(self.conffiles) do confkeys[v] = true end
         local dirs = {}
-        for _,v in ipairs(self.filelist) do
+        for _,v in ipairs(self.filelist) do if v ~= "/" then
             dpkg.debug("Removing " .. v)
             if not confkeys[v] then if fs.isDir(v) then table.insert(dirs, v) else fs.delete(v) end end
-        end
+        end end
         table.sort(dirs, function(a, b) return #a > #b end)
         for _,v in ipairs(dirs) do if #fs.list(v) == 0 then fs.delete(v) end end
         -- Call postrm
@@ -855,6 +882,8 @@ dpkg.package = class "package" {
             local ext = v:match("[^.]+$")
             if not (ext == "postrm" or ext == "conffiles" or ext == "list") then fs.delete(v) end
         end
+        -- Update file list
+
         updateStatus(dpkg.package.packagedb[self.name], 3, "config-files")
         if not fs.exists(dir("info/" .. self.name .. ".postrm")) and not fs.exists(dir("info/" .. self.name .. ".conffiles")) then
             -- Treat this package as purged since it's pretty much the same
@@ -878,6 +907,11 @@ dpkg.package = class "package" {
                 return false
             end
         end
+        if getStatus(dpkg.package.packagedb[self.name], 3) ~= "config-files" then
+            dpkg.error("cannot purge package: package is" .. (getStatus(dpkg.package.packagedb[self.name], 3) == "not-installed" and " not " or " ") .. "installed")
+            return false
+        end
+        dpkg.print("Removing config files for " .. self.name .. " (" .. self.control.Version .. ") ...")
         for _,v in ipairs(self.conffiles) do fs.delete(v) end
         if not self.callMaintainerScript("postrm", "purge") then
             dpkg.error("postrm failed to run")
@@ -885,9 +919,8 @@ dpkg.package = class "package" {
             updateStatus(dpkg.package.packagedb[self.name], 3, "config-files")
             return false
         end
-        fs.delete(dir("info/" .. self.name .. ".postrm"))
-        fs.delete(dir("info/" .. self.name .. ".conffiles"))
-        fs.delete(dir("info/" .. self.name .. ".list"))
+        if fs.exists(dir("info/" .. self.name .. ".postrm")) then fs.delete(dir("info/" .. self.name .. ".postrm")) end
+        if fs.exists(dir("info/" .. self.name .. ".conffiles")) then fs.delete(dir("info/" .. self.name .. ".conffiles")) end
         updateStatus(dpkg.package.packagedb[self.name], 3, "not-installed")
         return true
     end,
@@ -1101,7 +1134,7 @@ if shell and pcall(require, "dpkg") then
             elseif v == "--purge" then mode = 5
             elseif v == "--verify" then mode = 6
             elseif v == "--audit" then mode = 7
-            -- TODO: maybe add avail?
+            -- TODO: add available
             elseif v == "--get-selections" then mode = 8
             elseif v == "--set-selections" then mode = 9
             elseif v == "--clear-selections" then mode = 10
@@ -1145,7 +1178,7 @@ if shell and pcall(require, "dpkg") then
                 elseif thing == "architecture" then dpkg.force.architecture = val
                 elseif thing == "bad-version" then dpkg.force.bad_version = val
                 elseif thing == "bad-verify" then dpkg.force.bad_verify = val end
-            elseif v == "--ignore-depends" then dpkg.options.ignore_depends = split(option, ",")
+            elseif v == "--ignore-depends" then for _,v in ipairs(split(option, ",")) do dpkg.options.ignore_depends[v] = true end
             elseif v == "--no-act" or v == "--dry-run" or v == "--simulate" then dpkg.options.dry_run = true
             elseif v == "--recursive" then recursive = true
             elseif v == "--admindir" then dpkg.admindir, dpkg_divert.admindir, dpkg_query.admindir, dpkg_trigger.admindir = option, option, option, option
