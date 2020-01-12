@@ -6,6 +6,7 @@
 --
 -- Copyright (c) 2019-2020 JackMacWindows.
 
+if shell.environment and not string.find(package.path, fs.getDir(shell.getRunningProgram()):gsub("%-", "%%-")) then package.path = package.path .. ";/" .. fs.getDir(shell.getRunningProgram()) .. "/?.lua" end
 local ar = require "ar"
 local tar = require "tar"
 local dpkg_control = require "dpkg-control"

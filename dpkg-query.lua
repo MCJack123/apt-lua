@@ -6,6 +6,7 @@
 --
 -- Copyright (c) 2019-2020 JackMacWindows.
 
+if shell.environment and not string.find(package.path, fs.getDir(shell.getRunningProgram()):gsub("%-", "%%-")) then package.path = package.path .. ";/" .. fs.getDir(shell.getRunningProgram()) .. "/?.lua" end
 local dpkg_control = require "dpkg-control"
 
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
