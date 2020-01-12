@@ -81,7 +81,7 @@ function tar.load(path, noser, rawdata)
         local retval = nil
         if file.seek then
             retval = oldread(c)
-            for ch in retval:gmatch(".") do sum = sum + ch:byte() end
+            if retval ~= nil then for ch in retval:gmatch(".") do sum = sum + ch:byte() end end
         else
             for i = 1, c do
                 local n = oldread()
@@ -518,8 +518,8 @@ if pcall(require, "tar") then
                 end
             end
             file.close()
-            return tar.load(LibDeflate:DecompressGzip(rawdata), noser, true)
-        else return tar.load(shell.resolve(arch), noser) end
+            return load(LibDeflate:DecompressGzip(rawdata), noser, true)
+        else return load(shell.resolve(arch), noser) end
     end
     local function saveFile(data)
         if not compress and arch then tar.save(data, shell.resolve(arch)) else
@@ -664,4 +664,110 @@ if pcall(require, "tar") then
     shell.setDir(olddir)
 end
 
-return tar
+-- Actual installer
+write("Enter the desired install path: ")
+local install_path = read(nil, nil, nil, "/usr/apt-lua")
+
+-- Install dpkg
+local temp = false
+if not fs.exists(shell.resolve("dpkg-lua.tar")) then
+    temp = true
+    print("Downloading dpkg-lua...")
+    local handle = http.get("https://github.com/MCJack123/apt-lua/blob/master/dpkg-lua.tar", nil, true)
+    local first = handle.read(1)
+    local file = fs.open(shell.resolve("dpkg-lua.tar"), "wb")
+    if type(first) == "number" then
+        while first ~= nil do
+            file.write(first)
+            first = handle.read()
+        end
+    else
+        first = first .. handle.read(4095)
+        while first ~= nil do
+            file.write(first)
+            first = handle.read(4096)
+        end
+    end
+    file.close()
+    handle.close()
+end
+print("Unpacking dpkg-lua.tar ...")
+local pkg = tar.load(shell.resolve("dpkg-lua.tar"))
+tar.extract(pkg, install_path)
+if temp then fs.delete(shell.resolve("dpkg-lua.tar")) end
+print("Setting up dpkg ...")
+fs.makeDir("/var/lib/dpkg/info")
+fs.makeDir("/var/lib/dpkg/triggers")
+fs.open("/var/lib/dpkg/triggers/File", "w").close()
+fs.open("/var/lib/dpkg/triggers/Unincorp", "w").close()
+local file = fs.open("/var/lib/dpkg/status", "w")
+file.write([[Package: dpkg
+Version: 0.1
+Architecture: craftos
+Maintainer: JackMacWindows <jackmacwindowslinux@gmail.com>
+Status: install ok installed
+Installed-Size: 343624
+Section: package-managers
+Essential: yes
+Priority: essential
+Description: dpkg package manager for CraftOS
+ dpkg-lua is a port of Debian's dpkg package manager for CraftOS.
+ It supports most of the features available in dpkg.
+]])
+file.close()
+file = fs.open("/var/lib/dpkg/info/dpkg.list", "w")
+for k in pairs(pkg) do file.writeLine(install_path .. "/" .. k) end
+file.writeLine("/var\n/var/lib\n/var/lib/dpkg\n/var/lib/dpkg/info\n/var/lib/dpkg/triggers")
+file.close()
+local md5 = dofile(install_path .. "/md5.lua")
+file = fs.open("/var/lib/dpkg/info/dpkg.md5sums", "w")
+for k,v in pairs(pkg) do file.writeLine(md5.sumhexa(v.data) .. "  " .. install_path .. "/" .. k) end
+file.close()
+
+-- Install apt
+temp = false
+if not fs.exists(shell.resolve("apt-lua.deb")) then
+    temp = true
+    local handle = http.get("https://api.github.com/repos/MCJack123/apt-lua/contents/apt-lua.deb")
+    if handle.readAll():find("Not Found") then
+        temp = -1
+        handle.close()
+    else
+        handle.close()
+        print("Downloading apt-lua...")
+        handle = http.get("https://github.com/MCJack123/apt-lua/blob/master/apt-lua.deb", nil, true)
+        local first = handle.read(1)
+        file = fs.open(shell.resolve("apt-lua.deb"), "wb")
+        if type(first) == "number" then
+            while first ~= nil do
+                file.write(first)
+                first = handle.read()
+            end
+        else
+            first = first .. handle.read(4095)
+            while first ~= nil do
+                file.write(first)
+                first = handle.read(4096)
+            end
+        end
+        file.close()
+        handle.close()
+    end
+end
+if temp ~= -1 then
+    shell.run(install_path .. "/dpkg -i " .. shell.resolve("apt-lua.deb"))
+    if temp then fs.delete(shell.resolve("apt-lua.deb")) end
+end
+
+-- Update PATH
+write("Would you like apt-lua to be added to your PATH? (y/N) ")
+local res = read()
+if res == "y" or res == "Y" then
+    file = fs.open("/startup.lua", fs.exists("/startup.lua") and "a" or "w")
+    file.writeLine("")
+    file.writeLine("shell.setPath(shell.path() .. ':" .. install_path .. "')")
+    file.close()
+    shell.setPath(shell.path() .. ':' .. install_path)
+    print("apt-lua has been added to your PATH.")
+end
+print("Done.")

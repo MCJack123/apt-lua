@@ -48,8 +48,8 @@ dpkg.error = function(text)
     term.blit("dpkg: error: ", "000000eeeee00", "fffffffffffff")
     print(text)
 end
-dpkg.debug = function(text) end
---local debugger = peripheral.find("debugger"); dpkg.debug = function(text) if debugger then debugger.print(text) else print("DEBUG: " .. text) end end
+--dpkg.debug = function(text) end
+local debugger = peripheral.find("debugger"); dpkg.debug = function(text) if debugger then debugger.print(text) end end
 
 local function dir(p) return fs.combine(dpkg.admindir, p) end
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
