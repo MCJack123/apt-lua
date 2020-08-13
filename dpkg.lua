@@ -414,7 +414,9 @@ dpkg.package = class "package" {
         end
         -- Call new preinst
         -- Is this an upgrade?
+        local upgradedVersion
         if dpkg.package.packagedb[self.name] ~= nil and getStatus(dpkg.package.packagedb[self.name], 3) ~= "not-installed" then
+            upgradedVersion = dpkg.package.packagedb[self.name].Version
             -- Are there config files still installed?
             if getStatus(dpkg.package.packagedb[self.name], 3) ~= "config-files" then
                 -- Upgrade
@@ -478,7 +480,8 @@ dpkg.package = class "package" {
             end
         end
         -- Unpack files
-        dpkg.print("Unpacking " .. self.name .. " (" .. self.control.Version .. ") ...")
+        if upgradedVersion then dpkg.print("Unpacking " .. self.name .. " (" .. self.control.Version .. ") over (" .. upgradedVersion .. ") ...")
+        else dpkg.print("Unpacking " .. self.name .. " (" .. self.control.Version .. ") ...") end
         self.filelist = {}
         local replaced = {}
         local function unpack_rollback()
@@ -1084,15 +1087,6 @@ function dpkg.readDatabase()
     dpkg.print(" " .. dpkg.package.filecount .. " files and directories installed.)")
 end
 
-local function wasRun()
-    if not shell then return true end
-    package.loaded["__sentinel"] = nil
-    package.preload["__sentinel"] = function() return package.loaded["__sentinel"] end
-    local sentinel = require("__sentinel")
-    for k, v in pairs(package.loaded) do if k ~= "__sentinel" and v == sentinel then return false end end
-    return true
-end
-
 --[[
     Modes:
     * 0 = install
@@ -1193,7 +1187,7 @@ Comparison operators for --compare-versions are:
 
 Use 'apt' or 'aptitude' for user-friendly package management.]]
 
-if wasRun() then
+if shell and pcall(require, "dpkg") then
     local args = {}
     local mode = nil
     local recursive = false

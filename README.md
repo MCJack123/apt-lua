@@ -22,4 +22,4 @@ The process is mostly the same as making any normal Debian package, but the arch
     * Note: maintainer scripts should be able to be run with `shell.run`
 3. Set the architecture in `debian/control` to `craftos` or `all`
 4. Build the package (e.g. `debuild -us -uc`)
-6. Deploy package
+5. Deploy package

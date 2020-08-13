@@ -212,7 +212,7 @@ end
 
 -- Packs files in a directory into a table
 function tar.pack(base, path)
-    if not fs.isDir(base) then return tar.read(base, path) end
+    if not fs.isDir(path and fs.combine(base, path) or base) then return tar.read(base, path) end
     local retval = {["//"] = {
         name = path .. "/",
         mode = fs.getPermissions and cc2u(fs.getPermissions(path, fs.getOwner(path) or 0)) * 0x40 + cc2u(fs.getPermissions(path, "*")) + bit.band(fs.getPermissions(path, "*"), 0x10) * 0x80 or 0x1FF,
