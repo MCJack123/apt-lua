@@ -18,7 +18,7 @@ local function pad(str, len, c) return string.len(str) < len and string.sub(str,
 local function lpad(str, len, c) return string.len(str) < len and string.rep(c or " ", len - string.len(str)) .. string.sub(str, 1, len) or str end
 local function u2cc(p) return bit.band(p, 0x1) * 8 + bit.band(p, 0x2) + bit.band(p, 0x4) / 4 + 4 end
 local function cc2u(p) return bit.band(p, 0x8) / 8 + bit.band(p, 0x2) + bit.band(p, 0x1) * 4 end
-local verbose = true
+local verbose = false
 
 local dpkg_deb = {}
 
