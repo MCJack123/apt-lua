@@ -55,8 +55,8 @@ end
 
 -- Loads an archive into a table
 function tar.load(path, noser, rawdata)
-    if not fs.exists(path) and not rawdata then error("Path does not exist", 2) end
-    local file 
+    if not rawdata and not fs.exists(path) then error("Path does not exist", 2) end
+    local file
     if rawdata then
         local s = 1
         file = {
@@ -321,6 +321,15 @@ local function CurrentTime(unixTime)
     }
 end
 
+local function wasRun()
+    if not shell then return true end
+    package.loaded["__sentinel"] = nil
+    package.preload["__sentinel"] = function() return package.loaded["__sentinel"] end
+    local sentinel = require("__sentinel")
+    for k, v in pairs(package.loaded) do if k ~= "__sentinel" and v == sentinel then return false end end
+    return true
+end
+
 local usage_str = [=[Usage: tar [OPTION...] [FILE]...
 CraftOS 'tar' saves many files together into a single tape or disk archive, and
 can restore individual files from the archive.
@@ -388,7 +397,7 @@ Examples:
       --usage                give a short usage message
       --version              print program version]=]
 
-if pcall(require, "tar") then
+if wasRun() then
     local args = {...}
     local arch = nil
     local files = {}

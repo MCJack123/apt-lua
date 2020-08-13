@@ -57,7 +57,16 @@ function dpkg_divert.remove(old)
     save(d)
 end
 
-if shell and pcall(require, "dpkg-divert") then
+local function wasRun()
+    if not shell then return true end
+    package.loaded["__sentinel"] = nil
+    package.preload["__sentinel"] = function() return package.loaded["__sentinel"] end
+    local sentinel = require("__sentinel")
+    for k, v in pairs(package.loaded) do if k ~= "__sentinel" and v == sentinel then return false end end
+    return true
+end
+
+if wasRun() then
     local args = {}
     local mode = 0
     local instdir = "/"

@@ -127,7 +127,16 @@ function dpkg_query.status.present(state) return state ~= "not-installed" and st
 function dpkg_query.status.needs_configure(state) return state == "config-failed" or state == "half-configured" or state == "unpacked" end
 function dpkg_query.status.get_number(state) for k,v in ipairs({"not-installed", "config-files", "half-installed", "unpacked", "half-configured", "triggers-awaited", "triggers-pending", "installed"}) do if v == state then return k end end return nil end
 
-if shell and pcall(require, "dpkg-query") then
+local function wasRun()
+    if not shell then return true end
+    package.loaded["__sentinel"] = nil
+    package.preload["__sentinel"] = function() return package.loaded["__sentinel"] end
+    local sentinel = require("__sentinel")
+    for k, v in pairs(package.loaded) do if k ~= "__sentinel" and v == sentinel then return false end end
+    return true
+end
+
+if wasRun() then
     local args = {}
     local mode = nil
     local showformat = "${Package}\t${Version}\n"

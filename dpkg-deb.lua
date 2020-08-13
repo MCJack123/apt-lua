@@ -11,13 +11,14 @@ local ar = require "ar"
 local tar = require "tar"
 local dpkg_control = require "dpkg-control"
 local LibDeflate = require "LibDeflate"
+local muxzcat = require "muxzcat"
 
 local function trim(s) return string.match(s, '^()[%s%z]*$') and '' or string.match(s, '^[%s%z]*(.*[^%s%z])') end
 local function pad(str, len, c) return string.len(str) < len and string.sub(str, 1, len) .. string.rep(c or " ", len - string.len(str)) or str end
 local function lpad(str, len, c) return string.len(str) < len and string.rep(c or " ", len - string.len(str)) .. string.sub(str, 1, len) or str end
 local function u2cc(p) return bit.band(p, 0x1) * 8 + bit.band(p, 0x2) + bit.band(p, 0x4) / 4 + 4 end
 local function cc2u(p) return bit.band(p, 0x8) / 8 + bit.band(p, 0x2) + bit.band(p, 0x1) * 4 end
-local verbose = false
+local verbose = true
 
 local dpkg_deb = {}
 
@@ -28,15 +29,21 @@ function dpkg_deb.load(path, noser, gettar)
     os.queueEvent("nosleep")
     os.queueEvent(os.pullEvent())
     if #arch < 3 or arch[1].name ~= "debian-binary" or arch[1].data ~= "2.0\n" then error("Invalid deb file", 2) end
-    if arch[2].name ~= "control.tar.gz" or arch[3].name ~= "data.tar.gz" then error("Unsupported compression format: " .. arch[2].name .. ", " .. arch[3].name .. ".", 2) end
+    local control_tar, data_tar, err
     if verbose then print("Extracting control...") end
-    local control_tar = LibDeflate:DecompressGzip(arch[2].data)
+    if arch[2].name == "control.tar.gz" then control_tar, err = LibDeflate:DecompressGzip(arch[2].data)
+    elseif arch[2].name == "control.tar.xz" then control_tar, err = muxzcat.DecompressXzOrLzmaString(arch[2].data)
+    else error("Unsupported compression format: " .. arch[2].name) end
+    if control_tar == nil then error("Could not decompress control file: " .. err) end
     os.queueEvent(os.pullEvent())
     local control = tar.load(control_tar, false, true)
     if control["."] ~= nil then control = control["."] end
     os.queueEvent(os.pullEvent())
     if verbose then print("Extracting data...") end
-    local data_tar = LibDeflate:DecompressGzip(arch[3].data)
+    if arch[3].name == "data.tar.gz" then data_tar, err = LibDeflate:DecompressGzip(arch[3].data)
+    elseif arch[3].name == "data.tar.xz" or arch[3].name == "data.tar.lzma" then data_tar, err = muxzcat.DecompressXzOrLzmaString(arch[3].data)
+    else error("Unsupported compression format: " .. arch[2].name) end
+    if data_tar == nil then error("Could not decompress data file: " .. err) end
     os.queueEvent(os.pullEvent())
     if gettar then return {control_tar, data_tar} end
     local data = tar.load(data_tar, noser, true)
@@ -149,7 +156,16 @@ local function CurrentTime(unixTime)
     }
 end
 
-if shell and pcall(require, "dpkg-deb") then
+local function wasRun()
+    if not shell then return true end
+    package.loaded["__sentinel"] = nil
+    package.preload["__sentinel"] = function() return package.loaded["__sentinel"] end
+    local sentinel = require("__sentinel")
+    for k, v in pairs(package.loaded) do if k ~= "__sentinel" and v == sentinel then return false end end
+    return true
+end
+
+if wasRun() then
     local mode = nil
     local tarextract = false
     local compress_level = 5

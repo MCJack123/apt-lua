@@ -192,9 +192,18 @@ local function CurrentTime(unixTime)
     }
 end
 
+local function wasRun()
+    if not shell then return true end
+    package.loaded["__sentinel"] = nil
+    package.preload["__sentinel"] = function() return package.loaded["__sentinel"] end
+    local sentinel = require("__sentinel")
+    for k, v in pairs(package.loaded) do if k ~= "__sentinel" and v == sentinel then return false end end
+    return true
+end
+
 local months = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 
-if pcall(require, "ar") then
+if wasRun() then
     local args = {...}
     if #args < 2 then error("Usage: ar <dpqrtx[cfTuv]> <archive.a> [path] [files...]") end
     if args[1] == "--version" then

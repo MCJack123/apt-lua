@@ -1084,6 +1084,15 @@ function dpkg.readDatabase()
     dpkg.print(" " .. dpkg.package.filecount .. " files and directories installed.)")
 end
 
+local function wasRun()
+    if not shell then return true end
+    package.loaded["__sentinel"] = nil
+    package.preload["__sentinel"] = function() return package.loaded["__sentinel"] end
+    local sentinel = require("__sentinel")
+    for k, v in pairs(package.loaded) do if k ~= "__sentinel" and v == sentinel then return false end end
+    return true
+end
+
 --[[
     Modes:
     * 0 = install
@@ -1184,7 +1193,7 @@ Comparison operators for --compare-versions are:
 
 Use 'apt' or 'aptitude' for user-friendly package management.]]
 
-if shell and pcall(require, "dpkg") then
+if wasRun() then
     local args = {}
     local mode = nil
     local recursive = false
